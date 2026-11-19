@@ -1,0 +1,11 @@
+.env
+*.db
+data/
+logs/
+.venv/
+__pycache__/
+.pytest_cache/
+# job folder contents (profile, resumes) — never commit
+candidate-profile.md
+*-resume.md
+job-folder/

@@ -1,0 +1,5 @@
+[{"id": "abc-1", "text": "Implementation Project Manager", "hostedUrl": "https://jobs.lever.co/beta/abc-1",
+  "categories": {"location": "Waterloo, ON", "commitment": "Full-time"}, "workplaceType": "hybrid",
+  "createdAt": 1795006800000, "descriptionPlain": "Onboarding SaaS clients.",
+  "lists": [{"text": "Requirements", "content": "<li>PMP</li>"}], "additionalPlain": "",
+  "salaryRange": {"min": 90000, "max": 110000, "currency": "CAD", "interval": "per-year-salary"}}]

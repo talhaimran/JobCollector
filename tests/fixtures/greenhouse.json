@@ -1,0 +1,6 @@
+{"jobs": [{"id": 111, "title": "Senior Project Manager", "absolute_url": "https://boards.greenhouse.io/acme/jobs/111",
+  "location": {"name": "Kitchener, Ontario"}, "updated_at": "2026-11-18T10:00:00-05:00",
+  "first_published": "2026-11-17T09:00:00-05:00",
+  "content": "&lt;p&gt;Lead projects using &lt;strong&gt;Jira&lt;/strong&gt; and Agile.&lt;/p&gt;"},
+ {"id": 112, "title": "Old Job", "absolute_url": "https://boards.greenhouse.io/acme/jobs/112",
+  "location": {"name": "Remote"}, "updated_at": "2020-01-01T00:00:00Z", "content": ""}]}

@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Collector</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: top bar with two views; audit = date/filters strip, reason grid, dense table; settings = stacked form groups beside a live preview */
+:root {
+  --bg: #f6f7f8; --surface: #ffffff; --fg: #1c2329; --muted: #5d6973; --line: #dfe3e7;
+  --accent: #1f6f8b; --accent-fg: #ffffff; --accent-soft: #e3f0f5;
+  --pass: #1d7a46; --pass-soft: #e2f3e9; --fail: #9a3b2e; --fail-soft: #f7e7e4; --dup: #7a5d12; --dup-soft: #f6efd9;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root {
+  --bg: #12171b; --surface: #1a2126; --fg: #e3e8ec; --muted: #94a1ab; --line: #2c353c;
+  --accent: #6cb8d4; --accent-fg: #0d1a20; --accent-soft: #1d3540;
+  --pass: #6fcf97; --pass-soft: #183427; --fail: #ec9a8c; --fail-soft: #3a211d; --dup: #e2c36f; --dup-soft: #352d16;
+  color-scheme: dark } }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; }
+.top { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+.top .in, .wrap { max-width: 1400px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.top .in { display: flex; align-items: center; gap: 24px; height: 52px; }
+.brand { font-weight: 600; }
+nav { display: flex; gap: 4px; }
+nav a { color: var(--muted); text-decoration: none; padding: 6px 12px; border-radius: 6px; }
+nav a[aria-current="page"] { color: var(--fg); background: var(--accent-soft); }
+.wrap { padding-block: 24px 48px; display: flex; flex-direction: column; gap: 20px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0; }
+h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 4px 0 0; max-width: 72ch; line-height: 1.5; }
+.label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; }
+.funnel { display: flex; flex-wrap: wrap; gap: 8px 24px; font-family: var(--mono); font-size: 13px; color: var(--muted); }
+.funnel b { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+input, select, button { font: inherit; color: var(--fg); }
+input[type=text], input[type=search], input[type=email], input[type=password], input[type=number], input[type=date], select {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; min-width: 0; }
+input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { background: var(--surface); border: 0; padding: 7px 12px; cursor: pointer; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.btn { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 7px 14px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 500; }
+.btn:disabled { opacity: .5; cursor: default; }
+.grow { flex: 1 1 240px; }
+.count { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+.reasons { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px; }
+.reason { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; text-align: left;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+.reason:hover { border-color: var(--accent); }
+.reason[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.reason .n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.bar { grid-column: 1 / -1; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--fail); }
+.reason.passed .bar i { background: var(--pass); }
+.tablebox { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; }
+.jobs table { min-width: 1100px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 500; background: var(--surface); }
+tr:last-child td { border-bottom: 0; }
+td.num, td.mono { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td a { color: var(--accent); text-decoration: none; font-weight: 500; }
+td a:hover { text-decoration: underline; }
+.co { color: var(--muted); }
+.pill { display: inline-block; font-size: 11.5px; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
+.pill.pass { color: var(--pass); background: var(--pass-soft); }
+.pill.fail { color: var(--fail); background: var(--fail-soft); }
+.pill.dup { color: var(--dup); background: var(--dup-soft); margin-top: 4px; }
+.pill.mail { color: var(--accent); background: var(--accent-soft); margin-top: 4px; }
+.why { color: var(--fail); }
+.kw { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.more { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 0; font-size: 12px; margin-top: 4px; text-decoration: underline; }
+.desc td { background: var(--bg); }
+.desc pre { white-space: pre-wrap; font-family: var(--sans); font-size: 13px; line-height: 1.55; max-width: 100ch; margin: 0; max-height: 360px; overflow: auto; }
+.empty { padding: 24px; color: var(--muted); }
+details.runs summary { cursor: pointer; color: var(--muted); }
+details.runs .tablebox { margin-top: 10px; }
+.err { color: var(--fail); font-size: 12px; }
+/* settings */
+.settings { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 900px) { .settings { grid-template-columns: minmax(0, 1fr); } }
+.group { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.field { display: grid; gap: 4px; }
+.field label { font-weight: 500; }
+.hint { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 480px) { .row2 { grid-template-columns: 1fr; } }
+.slider { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; }
+.slider input { width: 100%; accent-color: var(--accent); }
+.split { font-family: var(--mono); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.formula { font-family: var(--mono); font-size: 12.5px; color: var(--muted); background: var(--bg); border-radius: 6px; padding: 10px; line-height: 1.6; overflow-x: auto; }
+.check { display: flex; gap: 8px; align-items: center; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.status { font-size: 13px; }
+.status.ok { color: var(--pass); } .status.bad { color: var(--fail); }
+.preview { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 10px; }
+.delta.up { color: var(--pass); } .delta.down { color: var(--fail); }
+</style>
+</head>
+<body>
+<header class="top"><div class="in">
+  <span class="brand">Job Collector</span>
+  <nav><a href="#audit" id="nav-audit">Audit</a><a href="#settings" id="nav-settings">Settings</a></nav>
+</div></header>
+
+<main class="wrap" id="view-audit">
+  <div>
+    <h1>Filter audit</h1>
+    <p class="sub">Every job the collector saved, with the first filter each one failed. Pick a date range, then click a reason to see only those jobs. Click "description" to check a keyword or dealbreaker match yourself.</p>
+  </div>
+  <div class="controls">
+    <select id="field" aria-label="Which date to filter on">
+      <option value="found">Found on</option>
+      <option value="posted">Posted on</option>
+    </select>
+    <div class="seg" id="presets">
+      <button data-days="0">Today</button><button data-days="1">Since yesterday</button>
+      <button data-days="7">7 days</button><button data-days="30">30 days</button><button data-days="">All</button>
+    </div>
+    <input type="date" id="from" aria-label="From date">
+    <span class="count">to</span>
+    <input type="date" id="to" aria-label="To date">
+  </div>
+  <div class="funnel" id="funnel"></div>
+  <section>
+    <p class="label">Result</p>
+    <div class="reasons" id="reasons"></div>
+  </section>
+  <div class="controls">
+    <input id="q" class="grow" type="search" placeholder="Search title, company, location or reason" aria-label="Search jobs">
+    <select id="src" aria-label="Source"><option value="">All sources</option></select>
+    <span class="count" id="count"></span>
+  </div>
+  <div class="tablebox jobs">
+    <table>
+      <thead><tr><th>Result</th><th>Score</th><th>Job</th><th>Location</th><th>Model</th><th>Source</th><th>Posted</th><th>Found</th><th>Reason</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="9" class="empty">Loading jobs…</td></tr></tbody>
+    </table>
+  </div>
+  <details class="runs">
+    <summary>Recent runs and source errors</summary>
+    <div class="tablebox"><table>
+      <thead><tr><th>Run</th><th>Started</th><th>Found by source</th><th>New</th><th>Passed</th><th>Emailed</th><th>Errors</th></tr></thead>
+      <tbody id="runs"></tbody>
+    </table></div>
+  </details>
+</main>
+
+<main class="wrap" id="view-settings" hidden>
+  <div>
+    <h1>Settings</h1>
+    <p class="sub">Scoring values and email details are saved to <code>.env</code>. The email cutoff is saved to your profile (<code id="profile-path">candidate-profile.md</code>). Changes apply from the next run; scores already saved don't change.</p>
+  </div>
+  <div class="settings">
+    <form id="cfg" class="group-stack" style="display:flex;flex-direction:column;gap:16px" novalidate>
+      <section class="group">
+        <div><h2>Pre-score</h2><p class="hint">Each job that passes the filters gets a 0–100 score from two parts.</p></div>
+        <div class="field">
+          <label for="w">Weight: keywords vs title</label>
+          <div class="slider">
+            <input type="range" id="w" min="0" max="1" step="0.05">
+            <span class="split" id="w-split"></span>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="full">Keyword matches for full marks</label>
+            <input type="number" id="full" min="1" max="100" step="1">
+            <span class="hint">Your profile lists <span id="kw-count">–</span> must-have keywords.</span>
+          </div>
+          <div class="field">
+            <label for="cutoff">Email cutoff</label>
+            <input type="number" id="cutoff" min="0" max="100" step="1" placeholder="off">
+            <span class="hint">Only jobs at or above this are emailed. Blank emails every passing job.</span>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="exact">Title score: exact match</label>
+            <input type="number" id="exact" min="0" max="100" step="1">
+          </div>
+          <div class="field">
+            <label for="contained">Title score: target inside longer title</label>
+            <input type="number" id="contained" min="0" max="100" step="1">
+          </div>
+        </div>
+        <div class="formula" id="formula"></div>
+      </section>
+
+      <section class="group">
+        <div><h2>Email</h2><p class="hint">Gmail with an app password (Google Account → Security → 2-Step Verification → App passwords).</p></div>
+        <div class="row2">
+          <div class="field"><label for="from-addr">Send from</label><input type="email" id="from-addr" autocomplete="off"></div>
+          <div class="field"><label for="to-addr">Send to</label><input type="email" id="to-addr" autocomplete="off"></div>
+        </div>
+        <div class="field"><label for="smtp-user">Gmail login (SMTP user)</label><input type="email" id="smtp-user" autocomplete="off"></div>
+        <div class="field">
+          <label for="pw">App password</label>
+          <input type="password" id="pw" autocomplete="new-password">
+          <span class="hint" id="pw-hint"></span>
+        </div>
+        <label class="check"><input type="checkbox" id="send-empty"> Send an email even when a run finds no new matches</label>
+      </section>
+
+      <div class="actions">
+        <button type="submit" class="btn primary" id="save">Save settings</button>
+        <button type="button" class="btn" id="test">Send test email</button>
+        <span class="status" id="status" role="status"></span>
+      </div>
+    </form>
+
+    <aside class="preview group">
+      <div><h2>Preview</h2>
+        <p class="hint">Passing, non-duplicate jobs found in the last <select id="pv-days" aria-label="Preview period">
+          <option value="7">7 days</option><option value="30">30 days</option><option value="">all time</option></select>,
+          re-scored with the values on the left (not yet saved).</p></div>
+      <div class="funnel" id="pv-sum"></div>
+      <div class="tablebox"><table>
+        <thead><tr><th>Job</th><th>Now</th><th>New</th><th>Emailed?</th></tr></thead>
+        <tbody id="pv-rows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+      </table></div>
+    </aside>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+};
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const daysAgo = n => { const d = new Date(); d.setDate(d.getDate() - n); return ymd(d); };
+const localTime = iso => { if (!iso) return "–"; if (iso.length === 10) return iso;
+  const d = new Date(iso); return `${ymd(d)} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+
+/* ---------- routing ---------- */
+function route() {
+  const v = location.hash === "#settings" ? "settings" : "audit";
+  $("view-audit").hidden = v !== "audit"; $("view-settings").hidden = v !== "settings";
+  $("nav-audit").setAttribute("aria-current", v === "audit" ? "page" : "false");
+  $("nav-settings").setAttribute("aria-current", v === "settings" ? "page" : "false");
+  if (v === "settings") loadSettings();
+}
+window.addEventListener("hashchange", route);
+
+/* ---------- audit ---------- */
+let JOBS = [], active = null;
+const group = j => {
+  if (j.filter_passed) return "Passed all filters";
+  const r = j.filter_reason || "";
+  if (r.startsWith("location not matched")) return "Location not in your cities";
+  if (r.startsWith("excluded title")) return "Excluded title: " + r.split(": ")[1];
+  if (r.startsWith("excluded company")) return "Excluded company";
+  if (r.startsWith("remote restricted")) return "Remote, but limited to another country";
+  if (r.startsWith("dealbreaker")) return "Dealbreaker: " + r.split(": ")[1];
+  if (r.startsWith("salary below")) return "Salary below floor";
+  if (r.startsWith("employment type")) return "Employment type not wanted";
+  if (r === "title not in target titles") return "Title doesn't contain a target title";
+  if (r.startsWith("work model")) return "Work model not wanted";
+  return r;
+};
+
+function setPreset(days) {
+  $("presets").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.days === days)));
+  $("from").value = days === "" ? "" : daysAgo(Number(days));
+  $("to").value = days === "" ? "" : ymd(new Date());
+  try { localStorage.setItem("preset", days); } catch (e) {}
+  loadJobs();
+}
+$("presets").addEventListener("click", e => { if (e.target.dataset.days !== undefined) setPreset(e.target.dataset.days); });
+["from", "to"].forEach(id => $(id).addEventListener("change", () => {
+  $("presets").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", "false")); loadJobs(); }));
+$("field").addEventListener("change", loadJobs);
+
+async function loadJobs() {
+  const qs = new URLSearchParams({field: $("field").value});
+  if ($("from").value) qs.set("from", $("from").value);
+  if ($("to").value) qs.set("to", $("to").value);
+  try { JOBS = await api("/api/jobs?" + qs); }
+  catch (e) { $("rows").innerHTML = `<tr><td colspan="9" class="empty">Couldn't load jobs: ${esc(e.message)}</td></tr>`; return; }
+  JOBS.forEach(j => j.g = group(j));
+  if (active && !JOBS.some(j => j.g === active)) active = null;
+  const srcs = [...new Set(JOBS.map(j => j.source))].sort(), cur = $("src").value;
+  $("src").innerHTML = '<option value="">All sources</option>' + srcs.map(s => `<option ${s === cur ? "selected" : ""}>${esc(s)}</option>`).join("");
+  summary(); render();
+}
+
+function summary() {
+  const total = JOBS.length, passed = JOBS.filter(j => j.filter_passed).length;
+  const dups = JOBS.filter(j => j.duplicate_of != null).length, mailed = JOBS.filter(j => j.emailed_at).length;
+  $("funnel").innerHTML = `<span>saved <b>${total}</b></span><span>rejected <b>${total - passed}</b></span>` +
+    `<span>passed <b>${passed}</b></span><span>duplicates <b>${dups}</b></span><span>emailed <b>${mailed}</b></span>`;
+  const counts = {};
+  JOBS.forEach(j => counts[j.g] = (counts[j.g] || 0) + 1);
+  const max = Math.max(1, ...Object.values(counts));
+  $("reasons").innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([g, n]) =>
+    `<button class="reason${g === "Passed all filters" ? " passed" : ""}" aria-pressed="${g === active}" data-g="${esc(g)}">
+      <span>${esc(g)}</span><span class="n">${n}</span><span class="bar"><i style="width:${(n / max * 100).toFixed(1)}%"></i></span></button>`
+  ).join("") || `<p class="hint">No jobs in this date range.</p>`;
+}
+$("reasons").addEventListener("click", e => {
+  const b = e.target.closest(".reason"); if (!b) return;
+  active = active === b.dataset.g ? null : b.dataset.g;
+  $("reasons").querySelectorAll(".reason").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.g === active)));
+  render();
+});
+
+function render() {
+  const q = $("q").value.trim().toLowerCase(), src = $("src").value;
+  const list = JOBS.filter(j => (!active || j.g === active) && (!src || j.source === src) &&
+    (!q || [j.title, j.company, j.location, j.filter_reason].join(" ").toLowerCase().includes(q)));
+  $("count").textContent = `${list.length} of ${JOBS.length} jobs`;
+  $("rows").innerHTML = list.length ? list.map(j => {
+    const kws = j.matched_keywords ? JSON.parse(j.matched_keywords) : [];
+    return `<tr data-id="${j.id}">
+      <td>${j.filter_passed ? '<span class="pill pass">passed</span>' : '<span class="pill fail">rejected</span>'}
+        ${j.duplicate_of != null ? `<br><span class="pill dup">duplicate of #${j.duplicate_of}</span>` : ""}
+        ${j.emailed_at ? '<br><span class="pill mail">emailed</span>' : ""}</td>
+      <td class="num">${j.prescore_total != null ? Math.round(j.prescore_total) : "–"}</td>
+      <td><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a><br><span class="co">${esc(j.company)} · #${j.id}</span>
+        ${kws.length ? `<div class="kw">${esc(kws.join(", "))}</div>` : ""}
+        <button class="more" data-id="${j.id}" aria-expanded="false">description</button></td>
+      <td>${esc(j.location)}</td>
+      <td class="mono">${esc(j.work_model)}</td>
+      <td class="mono">${esc(j.source)}</td>
+      <td class="mono">${esc(j.posted_at || "–")}</td>
+      <td class="mono">${esc(localTime(j.found_at))}</td>
+      <td class="why">${esc(j.filter_reason || "")}</td></tr>`;
+  }).join("") : `<tr><td colspan="9" class="empty">No jobs match. Widen the date range, clear the search or pick another reason.</td></tr>`;
+}
+$("q").addEventListener("input", render);
+$("src").addEventListener("change", render);
+$("rows").addEventListener("click", async e => {
+  const b = e.target.closest(".more"); if (!b) return;
+  const tr = b.closest("tr"), next = tr.nextElementSibling;
+  if (next && next.classList.contains("desc")) { next.remove(); b.setAttribute("aria-expanded", "false"); return; }
+  b.setAttribute("aria-expanded", "true");
+  const row = document.createElement("tr"); row.className = "desc";
+  row.innerHTML = `<td colspan="9"><pre>Loading…</pre></td>`; tr.after(row);
+  try { const j = await api("/api/jobs/" + b.dataset.id);
+    row.querySelector("pre").textContent = j.description || "This source gave no description."; }
+  catch (err) { row.querySelector("pre").textContent = "Couldn't load: " + err.message; }
+});
+
+async function loadRuns() {
+  try {
+    const runs = await api("/api/runs");
+    $("runs").innerHTML = runs.map(r => {
+      const errs = Object.values(JSON.parse(r.errors || "{}")).flat();
+      const found = Object.entries(JSON.parse(r.jobs_found || "{}")).map(([k, v]) => `${k} ${v}`).join(", ");
+      return `<tr><td class="num">${r.id}</td><td class="mono">${esc(localTime(r.started_at))}</td><td>${esc(found)}</td>
+        <td class="num">${r.new_jobs ?? "–"}</td><td class="num">${r.passed_filters ?? "–"}</td><td class="num">${r.emailed ?? "–"}</td>
+        <td>${errs.length ? errs.map(m => `<div class="err">${esc(m)}</div>`).join("") : "none"}</td></tr>`;
+    }).join("") || `<tr><td colspan="7" class="empty">No runs yet.</td></tr>`;
+  } catch (e) { $("runs").innerHTML = `<tr><td colspan="7" class="empty">${esc(e.message)}</td></tr>`; }
+}
+
+/* ---------- settings ---------- */
+let CFG = null, pvTimer = null;
+const form = () => ({
+  SCORE_WEIGHT_KEYWORDS: Number($("w").value), KEYWORD_FULL_MARKS: $("full").value,
+  TITLE_EXACT_SCORE: $("exact").value, TITLE_CONTAINED_SCORE: $("contained").value,
+  email_cutoff: $("cutoff").value, EMAIL_FROM: $("from-addr").value, EMAIL_TO: $("to-addr").value,
+  SMTP_USER: $("smtp-user").value, SMTP_APP_PASSWORD: $("pw").value, SEND_WHEN_EMPTY: $("send-empty").checked,
+});
+function status(msg, ok) { $("status").textContent = msg; $("status").className = "status " + (ok ? "ok" : "bad"); }
+
+async function loadSettings() {
+  try { CFG = await api("/api/config"); } catch (e) { status("Couldn't load settings: " + e.message, false); return; }
+  $("w").value = CFG.SCORE_WEIGHT_KEYWORDS; $("full").value = CFG.KEYWORD_FULL_MARKS;
+  $("exact").value = CFG.TITLE_EXACT_SCORE; $("contained").value = CFG.TITLE_CONTAINED_SCORE;
+  $("cutoff").value = CFG.email_cutoff ?? ""; $("from-addr").value = CFG.EMAIL_FROM; $("to-addr").value = CFG.EMAIL_TO;
+  $("smtp-user").value = CFG.SMTP_USER; $("send-empty").checked = CFG.SEND_WHEN_EMPTY; $("pw").value = "";
+  $("pw").placeholder = CFG.has_password ? "•••••••••••••••• (saved)" : "not set";
+  $("pw-hint").textContent = CFG.has_password ? "A password is saved. Leave blank to keep it." : "No password saved yet. Email won't send until you add one.";
+  $("profile-path").textContent = CFG.profile_path;
+  $("kw-count").textContent = CFG.must_have_count ?? "–";
+  updateFormula(); schedulePreview();
+}
+function updateFormula() {
+  const w = Number($("w").value), t = 1 - w;
+  $("w-split").textContent = `keywords ${Math.round(w * 100)}% · title ${Math.round(t * 100)}%`;
+  $("formula").innerHTML = `keywords = min(100, matched ÷ ${esc($("full").value)} × 100)<br>` +
+    `title = ${esc($("exact").value)} exact · ${esc($("contained").value)} contained · 0 otherwise<br>` +
+    `score = keywords × ${w.toFixed(2)} + title × ${t.toFixed(2)}`;
+}
+function schedulePreview() { clearTimeout(pvTimer); pvTimer = setTimeout(runPreview, 250); }
+async function runPreview() {
+  const d = $("pv-days").value, qs = new URLSearchParams();
+  if (d) { qs.set("from", daysAgo(Number(d))); qs.set("to", ymd(new Date())); }
+  try {
+    const f = form(); delete f.SMTP_APP_PASSWORD;
+    const pv = await api("/api/preview?" + qs, f);
+    const n = pv.jobs.filter(j => j.emailed).length;
+    $("pv-sum").innerHTML = `<span>passing <b>${pv.jobs.length}</b></span><span>would be emailed <b>${n}</b></span>`;
+    $("pv-rows").innerHTML = pv.jobs.map(j => {
+      const diff = Math.round(j.new) - Math.round(j.old ?? 0);
+      return `<tr><td>${esc(j.title)}<br><span class="co">${esc(j.company)}</span></td>
+        <td class="num">${j.old != null ? Math.round(j.old) : "–"}</td>
+        <td class="num">${Math.round(j.new)} <span class="delta ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff ? (diff > 0 ? "+" : "") + diff : ""}</span></td>
+        <td>${j.emailed ? '<span class="pill pass">yes</span>' : '<span class="pill fail">no</span>'}</td></tr>`;
+    }).join("") || `<tr><td colspan="4" class="empty">No passing jobs in this period.</td></tr>`;
+  } catch (e) {
+    $("pv-sum").innerHTML = ""; $("pv-rows").innerHTML = `<tr><td colspan="4" class="empty">${esc(e.message)}</td></tr>`;
+  }
+}
+["w", "full", "exact", "contained", "cutoff"].forEach(id => $(id).addEventListener("input", () => { updateFormula(); schedulePreview(); }));
+$("pv-days").addEventListener("change", runPreview);
+$("cfg").addEventListener("submit", async e => {
+  e.preventDefault(); $("save").disabled = true;
+  try { await api("/api/config", form()); await loadSettings(); status("Saved. The next run uses these settings.", true); }
+  catch (err) { status(err.message, false); }
+  finally { $("save").disabled = false; }
+});
+$("test").addEventListener("click", async () => {
+  $("test").disabled = true; status("Sending…", true);
+  try { await api("/api/test-email", {}); status(`Test email sent to ${CFG?.EMAIL_TO || "your address"}. Uses saved settings.`, true); }
+  catch (err) { status(err.message, false); }
+  finally { $("test").disabled = false; }
+});
+
+/* ---------- boot ---------- */
+let preset = "7";
+try { preset = localStorage.getItem("preset") ?? "7"; } catch (e) {}
+setPreset(preset);
+loadRuns();
+route();
+</script>
+</body>
+</html>
