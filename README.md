@@ -24,7 +24,7 @@ cp .env.example .env        # then edit .env
 | `SEND_WHEN_EMPTY` | `true` to get an email even with 0 matches (default `false`) |
 | `SCORE_WEIGHT_KEYWORDS`, `KEYWORD_FULL_MARKS`, `TITLE_EXACT_SCORE`, `TITLE_CONTAINED_SCORE` | pre-score tuning (defaults 0.7, 10, 100, 70); easiest to set from the settings page |
 
-Only the `## Job Search Settings` section of the profile is read. Leaving a setting blank turns that filter off, and each email lists the filters that were off.
+Only the `## Job Search Settings` section of the profile is read. You can edit it on the settings page (see below), which also creates the profile if you don't have one. Leaving a setting blank turns that filter off, and each email lists the filters that were off.
 
 ## Commands
 
@@ -90,7 +90,9 @@ sqlite3 data/jobs.db "SELECT prescore_total, title, company, matched_keywords FR
 `.venv/bin/python -m collector ui` serves a page on `http://127.0.0.1:8765`. It listens only on your Mac and rejects requests from other sites. Stop it with Ctrl+C.
 
 - **Audit**: every saved job, filtered by date found or date posted (Today, Since yesterday, 7 days, 30 days, All, or a custom range). Click a rejection reason to list those jobs, and click *description* to read the text the keyword and dealbreaker checks saw. *Recent runs* lists per-source counts and errors.
-- **Settings**: pre-score weights, email cutoff, Gmail addresses and app password, and *Send test email*. The app password is never sent back to the page: leave the field blank to keep the saved one.
+- **Settings**: the job search settings (titles, locations, work model, salary floor, keywords, excluded companies), pre-score weights, email cutoff, Gmail addresses and app password, and *Send test email*. The app password is never sent back to the page: leave the field blank to keep the saved one. The preview re-runs the filters and scores on saved jobs with your unsaved values.
+
+No profile yet? Fill in *Job search* and save: the page creates `candidate-profile.md` with just a `## Job Search Settings` section. If the profile has no such section, one is added at the end. Target companies and base resume are still edited in the file.
 
 ## Scheduling (launchd, every 2 hours)
 
