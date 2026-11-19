@@ -106,3 +106,50 @@ def test_api_blocks_cross_site(server):
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(req)
     assert e.value.code == 403
+
+
+PROFILE_BODY = {"target_titles": "Project Manager,  Senior Project Manager", "exclude_titles": "",
+                "locations": "Kitchener ON", "remote_in": "Canada", "work_model": "remote, Hybrid",
+                "employment_type": "Full-time", "salary_floor": "85000", "must_have": "Jira, Agile",
+                "dealbreakers": "French required", "excluded_companies": ""}
+
+
+def test_validate_profile():
+    out = webui.validate_profile({"profile": PROFILE_BODY})
+    assert out["target_titles"] == "Project Manager, Senior Project Manager"
+    assert out["work_model"] == "Remote, Hybrid" and out["salary_floor"] == "85000"
+    assert webui.validate_profile({}) == {}  # page sent no profile: leave it alone
+    for bad, msg in [({"work_model": "Office"}, "isn't one of"),
+                     ({"locations": "Kitchener\nEmail cutoff: 0"}, "one line"),
+                     ({"salary_floor": "-5"}, "between")]:
+        with pytest.raises(ValueError, match=msg):
+            webui.validate_profile({"profile": {**PROFILE_BODY, **bad}})
+
+
+def test_save_creates_missing_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROFILE_PATH", tmp_path / "candidate-profile.md")
+    monkeypatch.setattr(webui, "ENV_PATH", tmp_path / ".env")
+    cfg = webui.read_config()
+    assert not cfg["profile_exists"] and cfg["profile"]["target_titles"] == ""
+    webui.save_config({**GOOD, "profile": PROFILE_BODY})
+    s = settings.load(config.PROFILE_PATH)
+    assert s.target_titles == ["Project Manager", "Senior Project Manager"] and s.exclude_titles == []
+    assert s.salary_floor == 85000 and s.email_cutoff == 55 and s.must_have == ["Jira", "Agile"]
+
+
+def test_save_adds_section_to_profile_without_one(tmp_path, monkeypatch):
+    p = tmp_path / "candidate-profile.md"
+    p.write_text("# Resume\nSome text\n")
+    monkeypatch.setattr(config, "PROFILE_PATH", p)
+    monkeypatch.setattr(webui, "ENV_PATH", tmp_path / ".env")
+    webui.save_config({**GOOD, "profile": PROFILE_BODY})
+    assert p.read_text().startswith("# Resume\nSome text\n\n## Job Search Settings\n")
+    assert settings.load(p).locations == ["Kitchener ON"]
+
+
+def test_preview_uses_unsaved_filters(server):
+    # job 2 (Chef) failed before; with Chef as a target title it passes in the preview, nothing saved
+    body = {"profile": {**PROFILE_BODY, "target_titles": "Chef", "locations": "", "work_model": ""}}
+    pv = call(server + "/api/preview", body)[1]
+    assert [(j["id"], j["old"]) for j in pv["jobs"]] == [(2, None)]
+    assert settings.load(config.PROFILE_PATH).target_titles == ["Project Manager"]

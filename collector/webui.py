@@ -10,13 +10,17 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import dotenv_values
 
-from . import config, db, emailer, prescore, settings
+from . import config, db, emailer, filters, prescore, settings
 
 log = logging.getLogger(__name__)
 ENV_PATH = config.ROOT / ".env"
 PAGE = Path(__file__).parent / "web" / "index.html"
 EMAIL_KEYS = ["EMAIL_FROM", "EMAIL_TO", "SMTP_USER"]
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+LIST_FIELDS = ["target_titles", "exclude_titles", "locations", "remote_in", "work_model", "employment_type",
+               "must_have", "dealbreakers", "excluded_companies"]
+CHOICES = {"work_model": ["Remote", "Hybrid", "On-site"], "employment_type": ["Full-time", "Contract", "Part-time"]}
+SECTION = "## Job Search Settings\n"
 JOB_FIELDS = ("id, source, title, company, location, work_model, employment_type, posted_at, found_at, "
               "filter_passed, filter_reason, prescore_total, prescore_keywords, prescore_title, "
               "matched_keywords, duplicate_of, emailed_at, url, run_id")
@@ -45,17 +49,30 @@ def update_env(path: Path, updates: dict):
 
 
 # --- config read / validate / save -----------------------------------------
+def profile_text() -> str:
+    """The profile, or a bare settings section when there's no profile (or it has no section yet)."""
+    p = config.PROFILE_PATH
+    text = p.read_text(encoding="utf-8") if p.exists() else ""
+    try:
+        settings.extract_section(text)
+        return text
+    except ValueError:
+        return (text.rstrip("\n") + "\n\n" if text.strip() else "") + SECTION
+
+
 def read_config() -> dict:
     env = dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
-    s = settings.load(config.PROFILE_PATH)
+    s = settings.parse(profile_text())
     out = {k: env.get(k) or "" for k in EMAIL_KEYS}
     out["has_password"] = bool(env.get("SMTP_APP_PASSWORD"))
     out["SEND_WHEN_EMPTY"] = (env.get("SEND_WHEN_EMPTY") or "false").lower() == "true"
     for k, d in config.SCORE_DEFAULTS.items():
         out[k] = float(env[k]) if env.get(k) else d
     out["email_cutoff"] = s.email_cutoff
-    out["must_have_count"] = len(s.must_have)
+    out["profile"] = {a: ", ".join(getattr(s, a)) for a in LIST_FIELDS}
+    out["profile"]["salary_floor"] = s.salary_floor
     out["profile_path"] = str(config.PROFILE_PATH)
+    out["profile_exists"] = config.PROFILE_PATH.exists()
     return out
 
 
@@ -90,12 +107,40 @@ def validate(body: dict) -> tuple[dict, float | None]:
     return env, cutoff
 
 
+def validate_profile(body: dict) -> dict:
+    """Profile settings from the page -> {attr: value text}. Empty if the page sent none."""
+    prof = body.get("profile")
+    if not isinstance(prof, dict):
+        return {}
+    out = {}
+    for a in LIST_FIELDS:
+        v = str(prof.get(a) or "")
+        if re.search(r"[\r\n]", v):
+            raise ValueError(f"{a} must be one line")  # a newline would write a new profile line
+        items = [x.strip() for x in v.split(",") if x.strip()]
+        if a in CHOICES:
+            allowed = {c.lower(): c for c in CHOICES[a]}
+            bad = [x for x in items if x.lower() not in allowed]
+            if bad:
+                raise ValueError(f"{a}: {', '.join(bad)} isn't one of {', '.join(CHOICES[a])}")
+            items = [allowed[x.lower()] for x in items]
+        out[a] = ", ".join(items)
+    sal = prof.get("salary_floor")
+    out["salary_floor"] = "" if sal in (None, "") else f"{_num(prof, 'salary_floor', 0, 10_000_000):g}"
+    return out
+
+
+def apply_profile(text: str, prof: dict, cutoff) -> str:
+    for a, v in prof.items():
+        text = settings.set_value(text, a, v)
+    return settings.set_value(text, "email_cutoff", "" if cutoff is None else f"{cutoff:g}")
+
+
 def save_config(body: dict):
     env, cutoff = validate(body)
+    prof = validate_profile(body)
     update_env(ENV_PATH, env)
-    p = config.PROFILE_PATH
-    value = "" if cutoff is None else f"{cutoff:g}"
-    _atomic_write(p, settings.set_value(p.read_text(encoding="utf-8"), "email_cutoff", value))
+    _atomic_write(config.PROFILE_PATH, apply_profile(profile_text(), prof, cutoff))
 
 
 # --- queries ------------------------------------------------------------------
@@ -111,16 +156,20 @@ def query_jobs(conn, start=None, end=None, field="found"):
 
 
 def preview(conn, body: dict, start=None, end=None):
-    """Re-score passing, non-duplicate jobs in the date range with the proposed values."""
-    env, cutoff = validate({**read_config(), **body})
+    """Re-filter and re-score non-duplicate jobs in the date range with the proposed (unsaved) values."""
+    merged = {**read_config(), **body}
+    env, cutoff = validate(merged)
     p = {k: env[k] for k in config.SCORE_DEFAULTS}
-    s = settings.load(config.PROFILE_PATH)
-    ids = [j["id"] for j in query_jobs(conn, start, end) if j["filter_passed"] and j["duplicate_of"] is None]
+    s = settings.parse(apply_profile(profile_text(), validate_profile(merged), cutoff))
+    ids = [j["id"] for j in query_jobs(conn, start, end) if j["duplicate_of"] is None]
     out = []
     for i in ids:
-        row = dict(conn.execute("SELECT id, title, company, description, prescore_total FROM jobs WHERE id=?", (i,)).fetchone())
+        row = dict(conn.execute("SELECT * FROM jobs WHERE id=?", (i,)).fetchone())
+        if not filters.check(row, s)[0]:
+            continue
         new = prescore.score(row, s, p)["prescore_total"]
-        out.append({"id": i, "title": row["title"], "company": row["company"], "old": row["prescore_total"],
+        out.append({"id": i, "title": row["title"], "company": row["company"],
+                    "old": row["prescore_total"] if row["filter_passed"] else None,
                     "new": new, "emailed": cutoff is None or new >= cutoff})
     out.sort(key=lambda r: r["new"], reverse=True)
     return {"cutoff": cutoff, "jobs": out}

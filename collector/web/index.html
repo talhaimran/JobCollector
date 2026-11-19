@@ -99,6 +99,9 @@ details.runs .tablebox { margin-top: 10px; }
 .split { font-family: var(--mono); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .formula { font-family: var(--mono); font-size: 12.5px; color: var(--muted); background: var(--bg); border-radius: 6px; padding: 10px; line-height: 1.6; overflow-x: auto; }
 .check { display: flex; gap: 8px; align-items: center; }
+fieldset.field { border: 0; padding: 0; margin: 0; min-width: 0; }
+fieldset.field legend { font-weight: 500; padding: 0; margin-bottom: 4px; }
+textarea { font: inherit; resize: vertical; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .status { font-size: 13px; }
 .status.ok { color: var(--pass); } .status.bad { color: var(--fail); }
@@ -158,10 +161,26 @@ details.runs .tablebox { margin-top: 10px; }
 <main class="wrap" id="view-settings" hidden>
   <div>
     <h1>Settings</h1>
-    <p class="sub">Scoring values and email details are saved to <code>.env</code>. The email cutoff is saved to your profile (<code id="profile-path">candidate-profile.md</code>). Changes apply from the next run; scores already saved don't change.</p>
+    <p class="sub">Scoring values and email details are saved to <code>.env</code>. Job search settings and the email cutoff are saved to your profile (<code id="profile-path">candidate-profile.md</code>)<span id="profile-new" hidden>, which will be created when you save</span>. Changes apply from the next run; scores already saved don't change.</p>
   </div>
   <div class="settings">
     <form id="cfg" class="group-stack" style="display:flex;flex-direction:column;gap:16px" novalidate>
+      <section class="group">
+        <div><h2>Job search</h2><p class="hint">Hard filters and keywords. Lists are comma-separated; a blank field switches that filter off.</p></div>
+        <div class="field"><label for="p-target_titles">Target titles</label><textarea id="p-target_titles" rows="2" data-profile></textarea><span class="hint">The title must contain one of these.</span></div>
+        <div class="field"><label for="p-exclude_titles">Exclude titles</label><textarea id="p-exclude_titles" rows="2" data-profile></textarea><span class="hint">Rejected if the title contains any of these.</span></div>
+        <div class="field"><label for="p-locations">Locations</label><input type="text" id="p-locations" data-profile><span class="hint">For hybrid and on-site jobs, e.g. Kitchener ON, Waterloo ON, Cambridge ON</span></div>
+        <div class="field"><label for="p-remote_in">Remote in</label><input type="text" id="p-remote_in" data-profile><span class="hint">Countries where remote jobs are allowed, e.g. Canada</span></div>
+        <div class="row2">
+          <fieldset class="field"><legend>Work model</legend><div class="actions"><label class="check"><input type="checkbox" name="work_model" value="Remote" data-profile> Remote</label><label class="check"><input type="checkbox" name="work_model" value="Hybrid" data-profile> Hybrid</label><label class="check"><input type="checkbox" name="work_model" value="On-site" data-profile> On-site</label></div></fieldset>
+          <fieldset class="field"><legend>Employment type</legend><div class="actions"><label class="check"><input type="checkbox" name="employment_type" value="Full-time" data-profile> Full-time</label><label class="check"><input type="checkbox" name="employment_type" value="Contract" data-profile> Contract</label><label class="check"><input type="checkbox" name="employment_type" value="Part-time" data-profile> Part-time</label></div></fieldset>
+        </div>
+        <div class="field"><label for="p-salary_floor">Salary floor (CAD/year)</label><input type="number" id="p-salary_floor" min="0" step="1000" placeholder="off" data-profile><span class="hint">Only CAD salaries are checked; jobs without a salary pass.</span></div>
+        <div class="field"><label for="p-must_have">Must-have keywords</label><textarea id="p-must_have" rows="3" data-profile></textarea><span class="hint">Scored, not filtered: each one found in the description adds to the keyword score.</span></div>
+        <div class="field"><label for="p-dealbreakers">Dealbreaker keywords</label><textarea id="p-dealbreakers" rows="3" data-profile></textarea><span class="hint">Rejected if the description contains any of these phrases.</span></div>
+        <div class="field"><label for="p-excluded_companies">Excluded companies</label><input type="text" id="p-excluded_companies" data-profile></div>
+      </section>
+
       <section class="group">
         <div><h2>Pre-score</h2><p class="hint">Each job that passes the filters gets a 0–100 score from two parts.</p></div>
         <div class="field">
@@ -175,7 +194,7 @@ details.runs .tablebox { margin-top: 10px; }
           <div class="field">
             <label for="full">Keyword matches for full marks</label>
             <input type="number" id="full" min="1" max="100" step="1">
-            <span class="hint">Your profile lists <span id="kw-count">–</span> must-have keywords.</span>
+            <span class="hint">You list <span id="kw-count">–</span> must-have keywords.</span>
           </div>
           <div class="field">
             <label for="cutoff">Email cutoff</label>
@@ -222,7 +241,7 @@ details.runs .tablebox { margin-top: 10px; }
       <div><h2>Preview</h2>
         <p class="hint">Passing, non-duplicate jobs found in the last <select id="pv-days" aria-label="Preview period">
           <option value="7">7 days</option><option value="30">30 days</option><option value="">all time</option></select>,
-          re-scored with the values on the left (not yet saved).</p></div>
+          re-filtered and re-scored with the values on the left (not yet saved).</p></div>
       <div class="funnel" id="pv-sum"></div>
       <div class="tablebox"><table>
         <thead><tr><th>Job</th><th>Now</th><th>New</th><th>Emailed?</th></tr></thead>
@@ -375,7 +394,18 @@ const form = () => ({
   TITLE_EXACT_SCORE: $("exact").value, TITLE_CONTAINED_SCORE: $("contained").value,
   email_cutoff: $("cutoff").value, EMAIL_FROM: $("from-addr").value, EMAIL_TO: $("to-addr").value,
   SMTP_USER: $("smtp-user").value, SMTP_APP_PASSWORD: $("pw").value, SEND_WHEN_EMPTY: $("send-empty").checked,
+  profile: profileForm(),
 });
+const TEXT_FIELDS = ["target_titles", "exclude_titles", "locations", "remote_in", "must_have", "dealbreakers", "excluded_companies"];
+const CHECK_FIELDS = ["work_model", "employment_type"];
+const picked = name => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(c => c.value).join(", ");
+function profileForm() {
+  const p = {salary_floor: $("p-salary_floor").value};
+  TEXT_FIELDS.forEach(f => p[f] = $("p-" + f).value.replace(/\s*\n\s*/g, ", "));  // textareas may wrap onto new lines
+  CHECK_FIELDS.forEach(f => p[f] = picked(f));
+  return p;
+}
+const kwCount = () => $("p-must_have").value.split(/[,\n]/).filter(s => s.trim()).length;
 function status(msg, ok) { $("status").textContent = msg; $("status").className = "status " + (ok ? "ok" : "bad"); }
 
 async function loadSettings() {
@@ -387,7 +417,13 @@ async function loadSettings() {
   $("pw").placeholder = CFG.has_password ? "•••••••••••••••• (saved)" : "not set";
   $("pw-hint").textContent = CFG.has_password ? "A password is saved. Leave blank to keep it." : "No password saved yet. Email won't send until you add one.";
   $("profile-path").textContent = CFG.profile_path;
-  $("kw-count").textContent = CFG.must_have_count ?? "–";
+  const P = CFG.profile;
+  TEXT_FIELDS.forEach(f => $("p-" + f).value = P[f]);
+  CHECK_FIELDS.forEach(f => { const on = P[f].toLowerCase().split(/\s*,\s*/);
+    document.querySelectorAll(`input[name="${f}"]`).forEach(c => c.checked = on.includes(c.value.toLowerCase())); });
+  $("p-salary_floor").value = P.salary_floor ?? "";
+  $("profile-new").hidden = CFG.profile_exists;
+  $("kw-count").textContent = kwCount();
   updateFormula(); schedulePreview();
 }
 function updateFormula() {
@@ -418,6 +454,7 @@ async function runPreview() {
   }
 }
 ["w", "full", "exact", "contained", "cutoff"].forEach(id => $(id).addEventListener("input", () => { updateFormula(); schedulePreview(); }));
+document.querySelectorAll("[data-profile]").forEach(el => el.addEventListener("input", () => { $("kw-count").textContent = kwCount(); schedulePreview(); }));
 $("pv-days").addEventListener("change", runPreview);
 $("cfg").addEventListener("submit", async e => {
   e.preventDefault(); $("save").disabled = true;

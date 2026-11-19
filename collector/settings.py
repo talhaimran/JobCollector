@@ -2,6 +2,7 @@
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -139,11 +140,13 @@ def set_value(text: str, attr: str, value: str) -> str:
         end -= 1  # insert before the blank lines that precede the next heading
     if lines and not lines[end - 1].endswith("\n"):
         lines[end - 1] += "\n"
-    lines.insert(end, f"{label}: {value}\n")
+    lines.insert(end, f"{label}: {value}".rstrip() + "\n")
     return "".join(lines)
 
 
 def load(path) -> Settings:
+    if not Path(path).exists():
+        raise FileNotFoundError(f"No profile at {path}. Fill in the Settings page (python -m collector ui) to create one.")
     with open(path, encoding="utf-8") as f:
         return parse(f.read())
 
