@@ -231,7 +231,7 @@ textarea { font: inherit; resize: vertical; }
       </section>
 
       <div class="actions">
-        <button type="submit" class="btn primary" id="save">Save settings</button>
+        <button type="submit" class="btn primary" id="save" disabled>Save settings</button>
         <button type="button" class="btn" id="test">Send test email</button>
         <span class="status" id="status" role="status"></span>
       </div>
@@ -409,7 +409,9 @@ const kwCount = () => $("p-must_have").value.split(/[,\n]/).filter(s => s.trim()
 function status(msg, ok) { $("status").textContent = msg; $("status").className = "status " + (ok ? "ok" : "bad"); }
 
 async function loadSettings() {
+  $("save").disabled = true;  // saving blank fields would wipe the profile's settings
   try { CFG = await api("/api/config"); } catch (e) { status("Couldn't load settings: " + e.message, false); return; }
+  if (!CFG.profile) { status("The server is running older code than this page. Restart `collector ui`.", false); return; }
   $("w").value = CFG.SCORE_WEIGHT_KEYWORDS; $("full").value = CFG.KEYWORD_FULL_MARKS;
   $("exact").value = CFG.TITLE_EXACT_SCORE; $("contained").value = CFG.TITLE_CONTAINED_SCORE;
   $("cutoff").value = CFG.email_cutoff ?? ""; $("from-addr").value = CFG.EMAIL_FROM; $("to-addr").value = CFG.EMAIL_TO;
@@ -425,6 +427,7 @@ async function loadSettings() {
   $("profile-new").hidden = CFG.profile_exists;
   $("kw-count").textContent = kwCount();
   updateFormula(); schedulePreview();
+  $("save").disabled = false;
 }
 function updateFormula() {
   const w = Number($("w").value), t = 1 - w;
@@ -459,8 +462,7 @@ $("pv-days").addEventListener("change", runPreview);
 $("cfg").addEventListener("submit", async e => {
   e.preventDefault(); $("save").disabled = true;
   try { await api("/api/config", form()); await loadSettings(); status("Saved. The next run uses these settings.", true); }
-  catch (err) { status(err.message, false); }
-  finally { $("save").disabled = false; }
+  catch (err) { status(err.message, false); $("save").disabled = false; }
 });
 $("test").addEventListener("click", async () => {
   $("test").disabled = true; status("Sending…", true);
