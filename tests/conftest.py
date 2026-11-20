@@ -4,6 +4,14 @@ from collector import config
 
 
 @pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Any test that forgets to fake a source fails instead of calling the real site."""
+    def refuse(*a, **kw):
+        raise AssertionError(f"network call in a test: {a[1] if len(a) > 1 else a}")
+    monkeypatch.setattr("requests.Session.request", refuse)
+
+
+@pytest.fixture(autouse=True)
 def default_scoring(monkeypatch):
     """Tests use the built-in scoring values, not whatever the local .env says."""
     d = config.SCORE_DEFAULTS

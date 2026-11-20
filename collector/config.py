@@ -1,5 +1,6 @@
 """All tunable knobs in one place."""
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -29,14 +30,28 @@ TITLE_CONTAINED_SCORE = int(os.getenv("TITLE_CONTAINED_SCORE", SCORE_DEFAULTS["T
 
 # --- JobSpy ---------------------------------------------------------------
 # dropped: zip_recruiter (403 from Canada), google (Google serves scripts a JavaScript-only page)
-JOBSPY_SITES = ["linkedin", "indeed", "glassdoor"]
+# linkedin has its own client (sources/linkedin.py) so its requests can be budgeted
+JOBSPY_SITES = ["indeed", "glassdoor"]
 RESULTS_WANTED = int(os.getenv("RESULTS_WANTED", "25"))
 HOURS_OLD = 24
 COUNTRY_INDEED = "Canada"
-LINKEDIN_FETCH_DESCRIPTION = True
 DELAY_SECONDS = (3, 8)       # random pause between queries
 BACKOFF_BASE_SECONDS = 30    # after an error: 30s, 60s, 120s ... per site
 MAX_SITE_ERRORS = 3          # consecutive errors before a site is skipped for the run
+
+# --- LinkedIn (own client, see sources/linkedin.py) -------------------------
+def _list(v):
+    return [x.strip() for x in (v or "").split(",") if x.strip()]
+
+
+LINKEDIN_MIN_HOURS = float(os.getenv("LINKEDIN_MIN_HOURS", "4"))       # at most one sweep this often
+LINKEDIN_MAX_HOURS = float(os.getenv("LINKEDIN_MAX_HOURS", "24"))      # cool-down cap after blocks
+LINKEDIN_REQUEST_BUDGET = int(os.getenv("LINKEDIN_REQUEST_BUDGET", "40"))  # search pages + job pages per sweep
+LINKEDIN_DISTANCE_MILES = int(os.getenv("LINKEDIN_DISTANCE_MILES", "25"))
+LINKEDIN_SEARCH_LOCATIONS = _list(os.getenv("LINKEDIN_SEARCH_LOCATIONS"))  # blank = profile Locations
+LINKEDIN_MAX_PAGES = 5           # 10 jobs per page
+LINKEDIN_DELAY_SECONDS = (5, 12)
+LINKEDIN_DESCRIPTION_TRIES = 3   # give up on a job page after this many failed sweeps
 
 # --- Company feeds --------------------------------------------------------
 FEED_MAX_AGE_HOURS = 24
@@ -49,3 +64,9 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_APP_PASSWORD = os.getenv("SMTP_APP_PASSWORD", "")
 SMTP_HOST, SMTP_PORT = "smtp.gmail.com", 465
 SEND_WHEN_EMPTY = os.getenv("SEND_WHEN_EMPTY", "false").lower() == "true"
+# email jobs that pass the filters but have no description (score is title-only), tagged "partial score"
+SEND_PARTIAL_SCORES = os.getenv("SEND_PARTIAL_SCORES", "false").lower() == "true"
+
+# --- Schedule: `python -m collector schedule install` --------------------
+SCHEDULE_PLATFORM = os.getenv("SCHEDULE_PLATFORM") or ("windows" if sys.platform == "win32" else "mac")
+SCHEDULE_HOURS = float(os.getenv("SCHEDULE_HOURS", "2"))

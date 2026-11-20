@@ -2,7 +2,9 @@
 
 Every 2 hours this collector finds job postings from the last 24 hours, filters them and gives each a keyword pre-score. It uses no AI. Every job goes into SQLite, and new matches are emailed to you. It never logs in to any site.
 
-**Sources:** JobSpy (LinkedIn, Indeed, Glassdoor) and the public Greenhouse, Lever and Ashby feeds of your "Target companies". ZipRecruiter (blocked from Canada) and Google for Jobs (needs a real browser) were dropped.
+**Sources:** LinkedIn (its own client, see below), JobSpy (Indeed, Glassdoor) and the public Greenhouse, Lever and Ashby feeds of your "Target companies". ZipRecruiter and hiring.cafe block scripts outright, and Google for Jobs needs a real browser, so they aren't used.
+
+Runs on macOS and Windows.
 
 ## Setup
 
@@ -13,6 +15,8 @@ python3 -m venv .venv
 cp .env.example .env        # then edit .env
 ```
 
+On Windows use `py -m venv .venv`, `.venv\Scripts\pip` and `.venv\Scripts\python`, and `copy` instead of `cp`.
+
 `.env`:
 
 | key | meaning |
@@ -22,6 +26,10 @@ cp .env.example .env        # then edit .env
 | `SMTP_APP_PASSWORD` | a Gmail **app password** (Google Account → Security → 2-Step Verification → App passwords) |
 | `RESULTS_WANTED` | results per JobSpy query (default 25) |
 | `SEND_WHEN_EMPTY` | `true` to get an email even with 0 matches (default `false`) |
+| `SEND_PARTIAL_SCORES` | `true` to also email passing jobs that have no description, tagged *partial score* (default `false`) |
+| `LINKEDIN_MIN_HOURS`, `LINKEDIN_REQUEST_BUDGET` | at most one LinkedIn sweep per 4 h, at most 40 requests each (defaults) |
+| `LINKEDIN_SEARCH_LOCATIONS`, `LINKEDIN_DISTANCE_MILES` | where LinkedIn searches (blank = your Locations) and the radius (default 25 miles) |
+| `SCHEDULE_PLATFORM`, `SCHEDULE_HOURS` | `mac` or `windows`, and how often to run (default 2 h); also on the settings page |
 | `SCORE_WEIGHT_KEYWORDS`, `KEYWORD_FULL_MARKS`, `TITLE_EXACT_SCORE`, `TITLE_CONTAINED_SCORE` | pre-score tuning (defaults 0.7, 10, 100, 70); easiest to set from the settings page |
 
 Only the `## Job Search Settings` section of the profile is read. You can edit it on the settings page (see below), which also creates the profile if you don't have one. Leaving a setting blank turns that filter off, and each email lists the filters that were off.
@@ -39,7 +47,29 @@ Only the `## Job Search Settings` section of the profile is read. You can edit i
 
 A dry run still saves jobs to the database. Those jobs count as "seen", so a later real run won't email them again.
 
-A run searches each location and "Remote in" country once per search title. Target titles that contain another target title are not searched separately, so your 7 titles become one "Project Manager" search. With 3 sites that is 12 queries with a 3–8 s pause between each, about 3–5 minutes. LinkedIn descriptions add one request per LinkedIn job. When a site errors, the collector waits 30 s, then 60 s, before retrying. After 3 errors in a row it skips that site for the rest of the run.
+A run searches each location and "Remote in" country once per search title. Target titles that contain another target title are not searched separately, so "Senior Project Manager" is covered by the "Project Manager" search. Indeed and Glassdoor are searched every run with a 3–8 s pause between queries. When one errors, the collector waits 30 s, then 60 s. After 3 errors in a row it skips that site for the rest of the run.
+
+### LinkedIn
+
+LinkedIn rate-limits hard (429 "blocked" after a few dozen requests), so it has its own client with a request budget:
+
+- **At most one sweep every 4 hours** (`LINKEDIN_MIN_HOURS`), whatever the run schedule.
+- **At most 40 requests per sweep** (`LINKEDIN_REQUEST_BUDGET`): search pages and job pages both count. 5–12 s between requests.
+- **Order:** first the job pages of jobs still missing a description, then the searches whose last success is oldest. A search that didn't finish stays oldest, so it goes first next time. Each search covers the time since its own last success plus an hour, so a skipped search misses nothing.
+- **Search pages:** newest first, 10 jobs each, until a page has nothing new.
+- **Job pages (descriptions) only for new jobs that pass** title, location, work model and company checks. Jobs over the budget are saved without a description and fetched next sweep (up to 3 tries).
+- **The first 429 ends the sweep** with no retries, and the next sweep waits twice as long (up to 24 h). A clean sweep goes back to 4 h.
+- One city plus a radius covers its neighbours: `LINKEDIN_SEARCH_LOCATIONS=Kitchener ON` with 25 miles includes Waterloo and Cambridge. Your Locations still decide which hybrid and on-site jobs pass.
+
+In the `runs` table, LinkedIn's count is new jobs only (known ones are dropped before parsing).
+
+### Partial scores
+
+A job with no description can't be keyword-scored or checked for dealbreakers, so its score is title-only and it's marked `score_partial`. Glassdoor never gives descriptions, and LinkedIn jobs over the budget wait for theirs. By default these aren't emailed until a description arrives. Turn on `SEND_PARTIAL_SCORES` (or the checkbox on the settings page) to email them straight away, tagged *partial score*, whatever the cutoff.
+
+### Work model
+
+Taken from the source's own field when there is one, then the title and location, then the description. In the description it looks for phrases such as "3 days a week in the office", "2–3 days on-site", "days in office", "Workplace type: Hybrid", "fully remote" and "fully on-site". Five days in the office counts as on-site. Plain "hybrid" next to words like *delivery*, *cloud* or *agile* is ignored.
 
 ## Pipeline
 
@@ -59,7 +89,7 @@ A run searches each location and "Remote in" country once per search title. Targ
    7. dealbreaker phrases in the title or description.
 4. **Pre-score** (0–100), for jobs that pass.
 5. **Save** everything, filtered-out jobs included.
-6. **Email** only new, passing, non-duplicate jobs scoring at least "Email cutoff".
+6. **Email** only new, passing, non-duplicate jobs scoring at least "Email cutoff". Jobs without a description wait for one, or are emailed as *partial score* if you turn that on (see LinkedIn below). A LinkedIn job whose description arrives in a later sweep is filtered and scored again then.
 
 ## How the pre-score works
 
@@ -94,30 +124,21 @@ sqlite3 data/jobs.db "SELECT prescore_total, title, company, matched_keywords FR
 
 No profile yet? Fill in *Job search* and save: the page creates `candidate-profile.md` with just a `## Job Search Settings` section. If the profile has no such section, one is added at the end. Target companies and base resume are still edited in the file.
 
-## Scheduling (launchd, every 2 hours)
+## Scheduling (macOS or Windows)
 
-Install:
-
-```bash
-mkdir -p logs && sed "s|__ROOT__|$PWD|g" launchd/com.jobcollector.collector.plist > ~/Library/LaunchAgents/com.jobcollector.collector.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jobcollector.collector.plist
-```
-
-Run it now and watch the log:
+Pick the computer and the interval on the settings page (or `SCHEDULE_PLATFORM` and `SCHEDULE_HOURS` in `.env`), then install:
 
 ```bash
-launchctl kickstart gui/$(id -u)/com.jobcollector.collector
-tail -f logs/collector.log
+.venv/bin/python -m collector schedule install      # macOS: launchd, runs once now too
+.venv/bin/python -m collector schedule status
+.venv/bin/python -m collector schedule uninstall
 ```
 
-Uninstall:
+On Windows run the same with `.venv\Scripts\python`. That creates a Task Scheduler task called *JobCollector* that runs `windows\run-collector.cmd` every N hours. Installing again after changing the interval replaces the old schedule. If `SCHEDULE_PLATFORM` doesn't match the computer, the command refuses.
 
-```bash
-launchctl bootout gui/$(id -u)/com.jobcollector.collector
-rm ~/Library/LaunchAgents/com.jobcollector.collector.plist
-```
+Watch the log: `tail -f logs/collector.log` (macOS) or `type logs\collector.log` (Windows).
 
-A lock file (`data/collector.lock`) stops two runs from overlapping. The OS releases the lock if a run crashes. When the Mac is asleep, launchd runs the missed job once it wakes.
+A lock file (`data/collector.lock`) stops two runs from overlapping on both systems. The OS releases the lock if a run crashes. When the Mac is asleep, launchd runs the missed job once it wakes. Task Scheduler skips runs missed while Windows was off unless you tick *Run task as soon as possible after a scheduled start is missed* in the task's settings.
 
 **macOS privacy:** this project lives under `~/Documents`, which macOS protects. If `logs/collector.err.log` shows `Operation not permitted`, there are two fixes:
 - Give `.venv/bin/python`'s target (`/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13`) Full Disk Access in System Settings → Privacy & Security.
@@ -130,7 +151,7 @@ A lock file (`data/collector.lock`) stops two runs from overlapping. The OS rele
 3. Running it again right away finds 0 new jobs.
 4. A real run sends you one email with correct links, and a run with nothing new sends nothing.
 5. `jobs` shows a clear `filter_reason` for every job that was filtered out (see the queries above).
-6. The launchd job runs on schedule and writes to `logs/`.
+6. The scheduled job (launchd or Task Scheduler) runs on schedule and writes to `logs/`.
 
 ## Layout
 
@@ -138,7 +159,8 @@ A lock file (`data/collector.lock`) stops two runs from overlapping. The OS rele
 collector/
   config.py        knobs: weights, delays, sites, results per query
   settings.py      Job Search Settings parser
-  sources/         jobspy_src.py, feeds.py (Greenhouse/Lever/Ashby), shared HTTP retry
+  sources/         linkedin.py (own client, request budget), jobspy_src.py (Indeed, Glassdoor),
+                   feeds.py (Greenhouse/Lever/Ashby), shared HTTP retry
   normalize.py     one job shape, work-model detection, phrase matching
   dedupe.py        fingerprints
   filters.py       hard filters
@@ -146,5 +168,8 @@ collector/
   db.py            SQLite schema, lock
   emailer.py       HTML + text email, Gmail SMTP
   pipeline.py      a run, end to end
-  cli.py           run / settings / report
+  schedule.py      launchd / Task Scheduler install
+  cli.py           run / settings / report / ui / schedule
+launchd/           macOS plist template
+windows/           run-collector.cmd for Task Scheduler
 ```

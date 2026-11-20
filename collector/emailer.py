@@ -22,6 +22,8 @@ def ago(posted_at: str | None, now: datetime) -> str:
 
 def flags(j: dict) -> list[str]:
     out = []
+    if j.get("score_partial"):
+        out.append("partial score: no description, so keywords and dealbreakers weren't checked")
     if j.get("work_model") == "unknown":
         out.append("work model unknown")
     if j.get("salary_currency") and j["salary_currency"].upper() != "CAD" and (j.get("salary_min") or j.get("salary_max")):
@@ -50,11 +52,14 @@ def build(jobs: list[dict], stats: dict, filters_off: list, errors: dict, now: d
         meta = [j.get("company") or "?", j.get("location") or "?", j.get("work_model"), j["source"],
                 f"posted {j.get('posted_at') or '?'} ({ago(j.get('posted_at'), now)})"]
         extra = [x for x in [_salary(j), *flags(j)] if x]
-        text += [f"[{j['prescore_total']:.0f}] {j['title']}", f"  {j['url']}", "  " + " · ".join(meta),
+        score = f"{j['prescore_total']:.0f}" + (" partial" if j.get("score_partial") else "")
+        text += [f"[{score}] {j['title']}", f"  {j['url']}", "  " + " · ".join(meta),
                  f"  keywords: {kws}"] + ([f"  note: {'; '.join(extra)}"] if extra else []) + [""]
         e = html.escape
         rows.append(
-            f"<tr><td style='padding:8px;font-size:20px;font-weight:bold;vertical-align:top'>{j['prescore_total']:.0f}</td>"
+            f"<tr><td style='padding:8px;font-size:20px;font-weight:bold;vertical-align:top'>{j['prescore_total']:.0f}"
+            + ("<br><span style='font-size:11px;font-weight:normal;color:#a60'>partial</span>" if j.get("score_partial") else "")
+            + "</td>"
             f"<td style='padding:8px'><a href='{e(j['url'] or '')}' style='font-size:16px'>{e(j['title'] or '')}</a><br>"
             f"{' · '.join(e(str(m)) for m in meta)}<br>"
             f"<span style='color:#555'>keywords ({j['prescore_keywords']:.0f}) : {e(kws)} · title {j['prescore_title']:.0f}</span>"

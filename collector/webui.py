@@ -22,7 +22,7 @@ LIST_FIELDS = ["target_titles", "exclude_titles", "locations", "remote_in", "wor
 CHOICES = {"work_model": ["Remote", "Hybrid", "On-site"], "employment_type": ["Full-time", "Contract", "Part-time"]}
 SECTION = "## Job Search Settings\n"
 JOB_FIELDS = ("id, source, title, company, location, work_model, employment_type, posted_at, found_at, "
-              "filter_passed, filter_reason, prescore_total, prescore_keywords, prescore_title, "
+              "filter_passed, filter_reason, prescore_total, prescore_keywords, prescore_title, score_partial, "
               "matched_keywords, duplicate_of, emailed_at, url, run_id")
 
 
@@ -66,6 +66,9 @@ def read_config() -> dict:
     out = {k: env.get(k) or "" for k in EMAIL_KEYS}
     out["has_password"] = bool(env.get("SMTP_APP_PASSWORD"))
     out["SEND_WHEN_EMPTY"] = (env.get("SEND_WHEN_EMPTY") or "false").lower() == "true"
+    out["SEND_PARTIAL_SCORES"] = (env.get("SEND_PARTIAL_SCORES") or "false").lower() == "true"
+    out["SCHEDULE_PLATFORM"] = env.get("SCHEDULE_PLATFORM") or config.SCHEDULE_PLATFORM
+    out["SCHEDULE_HOURS"] = float(env.get("SCHEDULE_HOURS") or 2)
     for k, d in config.SCORE_DEFAULTS.items():
         out[k] = float(env[k]) if env.get(k) else d
     out["email_cutoff"] = s.email_cutoff
@@ -93,7 +96,14 @@ def validate(body: dict) -> tuple[dict, float | None]:
            "KEYWORD_FULL_MARKS": _num(body, "KEYWORD_FULL_MARKS", 1, 100, True),
            "TITLE_EXACT_SCORE": _num(body, "TITLE_EXACT_SCORE", 0, 100, True),
            "TITLE_CONTAINED_SCORE": _num(body, "TITLE_CONTAINED_SCORE", 0, 100, True),
-           "SEND_WHEN_EMPTY": "true" if body.get("SEND_WHEN_EMPTY") else "false"}
+           "SEND_WHEN_EMPTY": "true" if body.get("SEND_WHEN_EMPTY") else "false",
+           "SEND_PARTIAL_SCORES": "true" if body.get("SEND_PARTIAL_SCORES") else "false"}
+    if "SCHEDULE_PLATFORM" in body:
+        if body["SCHEDULE_PLATFORM"] not in ("mac", "windows"):
+            raise ValueError("SCHEDULE_PLATFORM must be mac or windows")
+        env["SCHEDULE_PLATFORM"] = body["SCHEDULE_PLATFORM"]
+    if "SCHEDULE_HOURS" in body:
+        env["SCHEDULE_HOURS"] = _num(body, "SCHEDULE_HOURS", 1, 23, True)
     for k in EMAIL_KEYS:
         v = str(body.get(k) or "").strip()
         if v and not EMAIL_RE.match(v):
@@ -168,9 +178,11 @@ def preview(conn, body: dict, start=None, end=None):
         if not filters.check(row, s)[0]:
             continue
         new = prescore.score(row, s, p)["prescore_total"]
+        partial = not row["description"]
+        emailed = env["SEND_PARTIAL_SCORES"] == "true" if partial else cutoff is None or new >= cutoff
         out.append({"id": i, "title": row["title"], "company": row["company"],
                     "old": row["prescore_total"] if row["filter_passed"] else None,
-                    "new": new, "emailed": cutoff is None or new >= cutoff})
+                    "new": new, "partial": partial, "emailed": emailed})
     out.sort(key=lambda r: r["new"], reverse=True)
     return {"cutoff": cutoff, "jobs": out}
 
@@ -228,7 +240,7 @@ class Handler(BaseHTTPRequestHandler):
                 row = conn.execute("SELECT * FROM jobs WHERE id=?", (int(m.group(1)),)).fetchone()
                 return self._send(200, dict(row)) if row else self._send(404, {"error": "no such job"})
             if u.path == "/api/runs":
-                return self._send(200, [dict(r) for r in db.last_runs(conn, 30)])
+                return self._send(200, [dict(r) for r in db.last_runs(conn, 1000)])
             if u.path == "/api/config":
                 return self._send(200, read_config())
             return self._send(404, {"error": "not found"})

@@ -1,4 +1,4 @@
-"""JobSpy: LinkedIn, Indeed, Glassdoor (python-jobspy 1.4.1)."""
+"""JobSpy: Indeed, Glassdoor (python-jobspy 1.4.1). LinkedIn has its own client (linkedin.py)."""
 import logging
 import random
 import time
@@ -43,8 +43,6 @@ def scrape_kwargs(site: str, q: dict) -> dict:
             kw["search_term"] = f"{q['title']} remote"
     elif q["remote"]:
         kw["is_remote"] = True
-    if site == "linkedin":
-        kw["linkedin_fetch_description"] = config.LINKEDIN_FETCH_DESCRIPTION
     return kw
 
 

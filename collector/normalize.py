@@ -44,9 +44,43 @@ def html_to_text(s: str | None) -> str | None:
 
 
 # --- work model / employment type -----------------------------------------
-_HYBRID_DESC = re.compile(r"\bhybrid\s+(role|position|work|working|model|schedule|arrangement|environment)\b|\bthis is a hybrid\b", re.I)
-_REMOTE_DESC = re.compile(r"\b(fully remote|100% remote|remote[- ]first|this (is a|role is) remote)\b", re.I)
-_ONSITE_DESC = re.compile(r"\b(on-?site (role|position)|in[- ]office (role|position)|fully on-?site)\b", re.I)
+_N = r"(?:[1-5]|one|two|three|four|five)"
+_PLACE = r"(?:(?:the|our|an?)\s+)?(?:[\w-]+\s+){0,2}?(?:office|on-?\s?site|in[- ]person)"  # "in our Kitchener office"
+_LABEL = r"\b(?:work(?:place)?\s*(?:model|type|arrangement|location|style)|location\s*type)\s*[:\-–]\s*"
+_NOT_WORK = r"(?!\s+(?:cloud|delivery|agile|approach|methodolog\w*|project|waterfall|framework))"
+# "3 days a week in the office", "2-3 days per week on-site", "in office 4 days", "days on site"
+_DAYS = [re.compile(rf"\b({_N})(?:\s*(?:-|–|to|or)\s*({_N}))?\s+days?\s*(?:a|per|each|/)?\s*(?:week|wk)?"
+                    rf"\s*(?:in|at|on|from)?\s*{_PLACE}", re.I),
+         re.compile(rf"\b(?:in[- ]?{_PLACE}|on-?\s?site)\s+(?:for\s+)?({_N})(?:\s*(?:-|–|to|or)\s*({_N}))?\s+days?", re.I)]
+_DAYS_PLAIN = re.compile(rf"\bdays?\s+(?:on-?\s?site|in[- ]{_PLACE}|in[- ]person)\b", re.I)
+_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5}
+_DESC = [  # checked in order; the first match wins
+    ("on-site", re.compile(rf"\b(?:fully|100%)\s+(?:on-?\s?site|in[- ]office|in[- ]person)\b|{_LABEL}on-?\s?site", re.I)),
+    ("hybrid", re.compile(rf"\bhybrid\s*[(\-–:]?\s*(?:role|position|work(?:ing|place)?|model|schedule|arrangement|setting|"
+                          rf"opportunity|basis|job|environment|\d)\b|\b(?:is|be|a|an|on a|in a)\s+hybrid\b{_NOT_WORK}|"
+                          rf"{_LABEL}hybrid|\bthis is a hybrid\b", re.I)),
+    ("remote", re.compile(rf"\b(?:fully remote|100% remote|remote[- ]first|work(?:ing)? from home|"
+                          rf"remote\s+(?:role|position|job|opportunity)|this (?:is a|role is)\s+(?:fully\s+)?remote)\b|"
+                          rf"{_LABEL}remote", re.I)),
+    ("on-site", re.compile(r"\b(?:on-?\s?site|in[- ]office|in[- ]person)\s+(?:role|position|job)\b|"
+                           r"\bthis (?:is an?|role is)\s+(?:an?\s+)?(?:on-?\s?site|in[- ]office|in[- ]person)\b", re.I)),
+]
+
+
+def work_model_from_text(text: str | None) -> str | None:
+    """'hybrid', 'remote' or 'on-site' from phrases like '3 days a week in office'; None if nothing found."""
+    if not text:
+        return None
+    for rx in _DAYS:
+        if m := rx.search(text):
+            days = max(int(_WORDS.get(g.lower(), g)) for g in m.groups() if g)
+            return "on-site" if days >= 5 else "hybrid"
+    if _DAYS_PLAIN.search(text):
+        return "hybrid"
+    for model, rx in _DESC:
+        if rx.search(text):
+            return model
+    return None
 
 
 def detect_work_model(title, location, description=None, is_remote=None, hint=None) -> str:
@@ -58,13 +92,11 @@ def detect_work_model(title, location, description=None, is_remote=None, hint=No
     head = f"{title or ''} {location or ''}"
     if re.search(r"\bhybrid\b", head, re.I):
         return "hybrid"
+    from_desc = work_model_from_text(description)
     if is_remote or re.search(r"\bremote\b|work from home|\bwfh\b", head, re.I):
-        return "remote"
-    # shortcut: description phrases are a heuristic; extend the regexes if 'unknown' shows up a lot
-    for model, rx in (("hybrid", _HYBRID_DESC), ("remote", _REMOTE_DESC), ("on-site", _ONSITE_DESC)):
-        if description and rx.search(description):
-            return model
-    return "unknown"
+        # a "remote" search can still return hybrid jobs; trust days-in-office wording over the label
+        return from_desc if from_desc == "hybrid" else "remote"
+    return from_desc or "unknown"
 
 
 _EMP = {"fulltime": "full-time", "parttime": "part-time", "contract": "contract",
