@@ -40,15 +40,9 @@ BACKOFF_BASE_SECONDS = 30    # after an error: 30s, 60s, 120s ... per site
 MAX_SITE_ERRORS = 3          # consecutive errors before a site is skipped for the run
 
 # --- LinkedIn (own client, see sources/linkedin.py) -------------------------
-def _list(v):
-    return [x.strip() for x in (v or "").split(",") if x.strip()]
-
-
 LINKEDIN_MIN_HOURS = float(os.getenv("LINKEDIN_MIN_HOURS", "4"))       # at most one sweep this often
 LINKEDIN_MAX_HOURS = float(os.getenv("LINKEDIN_MAX_HOURS", "24"))      # cool-down cap after blocks
 LINKEDIN_REQUEST_BUDGET = int(os.getenv("LINKEDIN_REQUEST_BUDGET", "40"))  # search pages + job pages per sweep
-LINKEDIN_DISTANCE_MILES = int(os.getenv("LINKEDIN_DISTANCE_MILES", "25"))
-LINKEDIN_SEARCH_LOCATIONS = _list(os.getenv("LINKEDIN_SEARCH_LOCATIONS"))  # blank = profile Locations
 LINKEDIN_MAX_PAGES = 5           # 10 jobs per page
 LINKEDIN_DELAY_SECONDS = (5, 12)
 LINKEDIN_DESCRIPTION_TRIES = 3   # give up on a job page after this many failed sweeps

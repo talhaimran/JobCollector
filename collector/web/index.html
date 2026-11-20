@@ -172,7 +172,11 @@ textarea { font: inherit; resize: vertical; }
         <div><h2>Job search</h2><p class="hint">Hard filters and keywords. Lists are comma-separated; a blank field switches that filter off.</p></div>
         <div class="field"><label for="p-target_titles">Target titles</label><textarea id="p-target_titles" rows="2" data-profile></textarea><span class="hint">The title must contain one of these.</span></div>
         <div class="field"><label for="p-exclude_titles">Exclude titles</label><textarea id="p-exclude_titles" rows="2" data-profile></textarea><span class="hint">Rejected if the title contains any of these.</span></div>
-        <div class="field"><label for="p-locations">Locations</label><input type="text" id="p-locations" data-profile><span class="hint">For hybrid and on-site jobs, e.g. Kitchener ON, Waterloo ON, Cambridge ON</span></div>
+        <div class="row2">
+          <div class="field"><label for="p-search_locations">Search locations</label><input type="text" id="p-search_locations" data-profile><span class="hint">Where the job boards look, each with the radius, e.g. Kitchener ON. Blank uses the accepted cities.</span></div>
+          <div class="field"><label for="p-search_radius">Search radius (miles)</label><input type="number" id="p-search_radius" min="1" max="100" step="1" data-profile><span class="hint" id="radius-hint">25 miles ≈ 40 km.</span></div>
+        </div>
+        <div class="field"><label for="p-locations">Accepted cities</label><input type="text" id="p-locations" data-profile><span class="hint">Hybrid and on-site jobs pass only in one of these, e.g. Kitchener ON, Waterloo ON, Cambridge ON. Saved in your profile as "Locations".</span></div>
         <div class="field"><label for="p-remote_in">Remote in</label><input type="text" id="p-remote_in" data-profile><span class="hint">Countries where remote jobs are allowed, e.g. Canada</span></div>
         <div class="row2">
           <fieldset class="field"><legend>Work model</legend><div class="actions"><label class="check"><input type="checkbox" name="work_model" value="Remote" data-profile> Remote</label><label class="check"><input type="checkbox" name="work_model" value="Hybrid" data-profile> Hybrid</label><label class="check"><input type="checkbox" name="work_model" value="On-site" data-profile> On-site</label></div></fieldset>
@@ -429,11 +433,11 @@ const form = () => ({
   SEND_PARTIAL_SCORES: $("send-partial").checked, SCHEDULE_PLATFORM: $("platform").value, SCHEDULE_HOURS: $("hours").value,
   profile: profileForm(),
 });
-const TEXT_FIELDS = ["target_titles", "exclude_titles", "locations", "remote_in", "must_have", "dealbreakers", "excluded_companies"];
+const TEXT_FIELDS = ["target_titles", "exclude_titles", "search_locations", "locations", "remote_in", "must_have", "dealbreakers", "excluded_companies"];
 const CHECK_FIELDS = ["work_model", "employment_type"];
 const picked = name => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(c => c.value).join(", ");
 function profileForm() {
-  const p = {salary_floor: $("p-salary_floor").value};
+  const p = {salary_floor: $("p-salary_floor").value, search_radius: $("p-search_radius").value};
   TEXT_FIELDS.forEach(f => p[f] = $("p-" + f).value.replace(/\s*\n\s*/g, ", "));  // textareas may wrap onto new lines
   CHECK_FIELDS.forEach(f => p[f] = picked(f));
   return p;
@@ -458,6 +462,7 @@ async function loadSettings() {
   CHECK_FIELDS.forEach(f => { const on = P[f].toLowerCase().split(/\s*,\s*/);
     document.querySelectorAll(`input[name="${f}"]`).forEach(c => c.checked = on.includes(c.value.toLowerCase())); });
   $("p-salary_floor").value = P.salary_floor ?? "";
+  $("p-search_radius").value = P.search_radius ?? ""; $("p-search_radius").placeholder = CFG.default_radius; radiusHint();
   $("profile-new").hidden = CFG.profile_exists;
   $("kw-count").textContent = kwCount();
   updateFormula(); schedulePreview();
@@ -499,6 +504,11 @@ function schedCmd() {
 }
 ["w", "full", "exact", "contained", "cutoff"].forEach(id => $(id).addEventListener("input", () => { updateFormula(); schedulePreview(); }));
 $("send-partial").addEventListener("input", schedulePreview);
+function radiusHint() {
+  const mi = Number($("p-search_radius").value || CFG?.default_radius || 25);
+  $("radius-hint").textContent = `${mi} miles ≈ ${Math.round(mi * 1.609)} km` + ($("p-search_radius").value ? "." : " (the default).");
+}
+$("p-search_radius").addEventListener("input", radiusHint);
 $("platform").addEventListener("input", schedCmd);
 document.querySelectorAll("[data-profile]").forEach(el => el.addEventListener("input", () => { $("kw-count").textContent = kwCount(); schedulePreview(); }));
 $("pv-days").addEventListener("change", runPreview);
