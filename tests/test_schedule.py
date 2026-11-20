@@ -46,3 +46,25 @@ def test_validate_schedule_fields():
 ])
 def test_work_model_from_description(text, model):
     assert work_model_from_text(text) == model
+
+
+def test_save_applies_schedule_only_when_it_changed(monkeypatch):
+    calls = []
+    monkeypatch.setattr(schedule, "this_platform", lambda: "mac")
+    monkeypatch.setattr(schedule, "installed_hours", lambda: 2.0)
+    monkeypatch.setattr(schedule, "install", lambda p, h: calls.append((p, h)) or "installed")
+    assert webui.apply_schedule({"SCHEDULE_PLATFORM": "mac", "SCHEDULE_HOURS": 2}) is None and calls == []
+    assert webui.apply_schedule({"SCHEDULE_PLATFORM": "mac", "SCHEDULE_HOURS": 3}) == "installed"
+    assert calls == [("mac", 3)]
+    assert "not applied" in webui.apply_schedule({"SCHEDULE_PLATFORM": "windows", "SCHEDULE_HOURS": 3})
+    assert webui.apply_schedule({}) is None and len(calls) == 1
+
+
+def test_save_reports_install_failure(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(schedule, "this_platform", lambda: "mac")
+    monkeypatch.setattr(schedule, "installed_hours", lambda: None)
+    def fail(p, h):
+        raise subprocess.CalledProcessError(5, "launchctl", stderr="Bootstrap failed: 5")
+    monkeypatch.setattr(schedule, "install", fail)
+    assert "wasn't applied: Bootstrap failed" in webui.apply_schedule({"SCHEDULE_PLATFORM": "mac", "SCHEDULE_HOURS": 3})

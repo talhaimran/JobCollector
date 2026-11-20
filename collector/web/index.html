@@ -242,7 +242,7 @@ textarea { font: inherit; resize: vertical; }
             <select id="platform"><option value="mac">macOS (launchd)</option><option value="windows">Windows (Task Scheduler)</option></select></div>
           <div class="field"><label for="hours">Run every (hours)</label><input type="number" id="hours" min="1" max="23" step="1"></div>
         </div>
-        <span class="hint">After saving, apply it in a terminal in the project folder: <code id="sched-cmd"></code></span>
+        <span class="hint">Saving applies it to this computer, replacing the scheduled job (never adding a second one). When the interval changes, a run starts right away. For another computer, run <code id="sched-cmd"></code> there.</span>
       </section>
 
       <div class="actions">
@@ -504,7 +504,8 @@ document.querySelectorAll("[data-profile]").forEach(el => el.addEventListener("i
 $("pv-days").addEventListener("change", runPreview);
 $("cfg").addEventListener("submit", async e => {
   e.preventDefault(); $("save").disabled = true;
-  try { await api("/api/config", form()); await loadSettings(); status("Saved. The next run uses these settings.", true); }
+  try { const r = await api("/api/config", form()); await loadSettings();
+    status("Saved. The next run uses these settings." + (r.schedule_message ? " " + r.schedule_message : ""), !/not applied|wasn't applied/.test(r.schedule_message || "")); }
   catch (err) { status(err.message, false); $("save").disabled = false; }
 });
 $("test").addEventListener("click", async () => {

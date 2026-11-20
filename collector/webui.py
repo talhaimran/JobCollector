@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -10,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import dotenv_values
 
-from . import config, db, emailer, filters, prescore, settings
+from . import config, db, emailer, filters, prescore, schedule, settings
 
 log = logging.getLogger(__name__)
 ENV_PATH = config.ROOT / ".env"
@@ -146,11 +147,30 @@ def apply_profile(text: str, prof: dict, cutoff) -> str:
     return settings.set_value(text, "email_cutoff", "" if cutoff is None else f"{cutoff:g}")
 
 
-def save_config(body: dict):
+def apply_schedule(env: dict) -> str | None:
+    """Install/replace this computer's scheduled job when the saved interval differs from the installed one.
+    Returns a message for the page, or None when nothing changed."""
+    platform, hours = env.get("SCHEDULE_PLATFORM"), env.get("SCHEDULE_HOURS")
+    if platform is None or hours is None:
+        return None
+    if platform != schedule.this_platform():
+        return (f"Schedule saved for {platform} but not applied: this computer is {schedule.this_platform()}. "
+                f"Run `python -m collector schedule install` on the {platform} computer.")
+    if schedule.installed_hours() == hours:
+        return None  # reinstalling would start an unneeded run
+    try:
+        return schedule.install(platform, hours)
+    except (SystemExit, subprocess.CalledProcessError, OSError) as e:
+        detail = getattr(e, "stderr", None) or e
+        return f"Settings saved, but the schedule wasn't applied: {str(detail).strip()[:200]}"
+
+
+def save_config(body: dict) -> str | None:
     env, cutoff = validate(body)
     prof = validate_profile(body)
     update_env(ENV_PATH, env)
     _atomic_write(config.PROFILE_PATH, apply_profile(profile_text(), prof, cutoff))
+    return apply_schedule(env)
 
 
 # --- queries ------------------------------------------------------------------
@@ -257,8 +277,8 @@ class Handler(BaseHTTPRequestHandler):
             length = min(int(self.headers.get("Content-Length") or 0), 100_000)
             body = json.loads(self.rfile.read(length) or b"{}")
             if u.path == "/api/config":
-                save_config(body)
-                return self._send(200, read_config())
+                msg = save_config(body)
+                return self._send(200, {**read_config(), "schedule_message": msg})
             if u.path == "/api/preview":
                 return self._send(200, preview(db.connect(config.DB_PATH), body, q.get("from"), q.get("to")))
             if u.path == "/api/test-email":
