@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from collector import db, emailer, pipeline
+from collector import config, db, emailer, pipeline
 from collector.settings import Settings, TargetCompany
 from collector.sources import feeds, jobspy_src
 
@@ -23,7 +23,7 @@ def s():
 
 
 def jobspy_row(i, **kw):
-    r = {"site": "linkedin", "id": f"li-{i}", "job_url": f"https://li/{i}", "title": "Project Manager",
+    r = {"site": "indeed", "id": f"li-{i}", "job_url": f"https://li/{i}", "title": "Project Manager",
          "company": "Acme Inc", "location": "Kitchener, ON, Canada", "is_remote": False,
          "description": "Hybrid role. Jira and Agile.", "date_posted": "2026-11-18"}
     r.update(kw)
@@ -38,11 +38,15 @@ ROWS = [jobspy_row(1),
 def fake_scrape(**kw):
     if kw["site_name"] == ["glassdoor"]:
         raise RuntimeError("403 blocked")
-    return pd.DataFrame(ROWS if kw["site_name"] == ["linkedin"] else [])
+    return pd.DataFrame(ROWS if kw["site_name"] == ["indeed"] else [])
 
 
 def fake_jobspy(s):
     return jobspy_src.fetch(s, scrape=fake_scrape, sleep=lambda _: None)
+
+
+def no_linkedin(conn, s):
+    return {"jobs": [], "refreshed": {}, "found": 0, "errors": [], "skipped": None}
 
 
 def fake_feed(c):
@@ -55,11 +59,11 @@ def fake_feed(c):
 def test_full_run_then_rerun(s, tmp_path):
     conn = db.connect(tmp_path / "jobs.db")
     sent, printed = [], []
-    r = pipeline.run(False, s, conn, fake_jobspy, fake_feed, send=lambda *a: sent.append(a))
+    r = pipeline.run(False, s, conn, fake_jobspy, fake_feed, send=lambda *a: sent.append(a), fetch_linkedin=no_linkedin)
 
     # every query x site was tried; glassdoor failures and the lever feed didn't stop the run
     assert "glassdoor" in r["errors"] and "lever:down" in r["errors"]
-    assert r["found_by_source"]["linkedin"] == 6  # raw rows from 2 queries; dedupe happens after
+    assert r["found_by_source"]["indeed"] == 6  # raw rows from 2 queries; dedupe happens after
     assert r["emailed"] == 2 and len(sent) == 1 and "https://li/1" in sent[0][2]  # li-1 + greenhouse 111
 
     rows = {x["source_job_id"]: x for x in conn.execute("SELECT * FROM jobs")}
@@ -70,11 +74,11 @@ def test_full_run_then_rerun(s, tmp_path):
     assert rows["li-1"]["emailed_at"] and json.loads(rows["li-1"]["matched_keywords"]) == ["Jira", "Agile"]
 
     run = conn.execute("SELECT * FROM runs").fetchone()
-    assert json.loads(run["jobs_found"])["linkedin"] == 6 and run["new_jobs"] == 5
+    assert json.loads(run["jobs_found"])["indeed"] == 6 and run["new_jobs"] == 5
     assert "salary floor" in json.loads(run["filters_off"])
 
     r2 = pipeline.run(True, s, conn, fake_jobspy, fake_feed, send=lambda *a: sent.append(a),
-                      out=printed.append)
+                      out=printed.append, fetch_linkedin=no_linkedin)
     assert r2["new"] == 0 and r2["emailed"] == 0 and len(sent) == 1 and printed == []
 
 
@@ -85,7 +89,7 @@ def test_cross_source_duplicate_not_emailed(s, tmp_path):
         {"id": 9, "title": "Project Manager", "absolute_url": "https://gh/9",
          "location": {"name": "Kitchener, Ontario"}, "content": "Hybrid role. Jira"}, "ACME Ltd.")]
     printed = []
-    pipeline.run(True, s, conn, fake_jobspy, gh, out=printed.append)
+    pipeline.run(True, s, conn, fake_jobspy, gh, out=printed.append, fetch_linkedin=no_linkedin)
     dup = conn.execute("SELECT duplicate_of FROM jobs WHERE source='greenhouse'").fetchone()[0]
     first = conn.execute("SELECT id FROM jobs WHERE source_job_id='li-1'").fetchone()[0]
     assert dup == first and "https://gh/9" not in printed[0]
@@ -109,7 +113,7 @@ def test_jobspy_query_shapes(s):
     assert len(jobspy_src.build_queries(s)) == 2 * 2 + 2 * 1
     remote = {"title": "PM", "location": "Canada", "remote": True}
     assert "is_remote" not in jobspy_src.scrape_kwargs("indeed", remote)
-    assert jobspy_src.scrape_kwargs("linkedin", remote)["is_remote"] is True
+    assert jobspy_src.scrape_kwargs("glassdoor", remote)["is_remote"] is True
 
 
 def test_email_content():
@@ -134,16 +138,61 @@ def test_jobspy_logged_errors_count_as_errors_with_backoff(s):
     s.remote_in = ["Canada"]
 
     def scrape(**kw):
-        if kw["site_name"] == ["linkedin"]:
-            logging.getLogger("jobspy.linkedin").error("response status code 429 (blocked: use a proxy)")
+        if kw["site_name"] == ["indeed"]:
+            logging.getLogger("jobspy.indeed").error("response status code 429 (blocked: use a proxy)")
             return pd.DataFrame([jobspy_row(kw["location"].replace(" ", ""))])  # partial rows kept
         return pd.DataFrame([])
 
     sleeps = []
     jobs, found, errors = jobspy_src.fetch(s, scrape=scrape, sleep=sleeps.append)
-    assert found["linkedin"] == 3                       # 3 attempts, then skipped
-    assert len(errors["linkedin"]) == 4 and "429" in errors["linkedin"][0]
-    assert "skipped for rest of run" in errors["linkedin"][-1]
+    assert found["indeed"] == 3                         # 3 attempts, then skipped
+    assert len(errors["indeed"]) == 4 and "429" in errors["indeed"][0]
+    assert "skipped for rest of run" in errors["indeed"][-1]
     assert 30 in sleeps and 60 in sleeps                # backoff
-    assert "indeed" not in errors
+    assert "glassdoor" not in errors
     assert logging.getLogger("jobspy").handlers == []   # capture handler removed
+
+
+def test_partial_scores_held_or_sent(s, tmp_path, monkeypatch):
+    """No description: title-only 'partial' score; emailed only with SEND_PARTIAL_SCORES, whatever the cutoff."""
+    conn = db.connect(tmp_path / "jobs.db")
+    s.target_companies, s.email_cutoff = [], 90
+    li = lambda conn, s: {**no_linkedin(conn, s), "jobs": [{**jobspy_src.normalize.from_jobspy(jobspy_row(7, description=None)),
+                                                          "source": "linkedin"}]}
+    r = pipeline.run(False, s, conn, lambda s: ([], {}, {}), fake_feed, send=lambda *a: None, fetch_linkedin=li)
+    row = conn.execute("SELECT * FROM jobs").fetchone()
+    assert row["filter_passed"] == 1 and row["score_partial"] == 1 and r["emailed"] == 0
+
+    monkeypatch.setattr(config, "SEND_PARTIAL_SCORES", True)
+    sent = []
+    li2 = lambda conn, s: {**no_linkedin(conn, s), "jobs": [{**jobspy_src.normalize.from_jobspy(jobspy_row(8, description=None,
+                                                           company="Beta")), "source": "linkedin"}]}
+    r = pipeline.run(False, s, conn, lambda s: ([], {}, {}), fake_feed, send=lambda *a: sent.append(a), fetch_linkedin=li2)
+    assert r["emailed"] == 1 and "[30 partial]" in sent[0][2] and "partial score" in sent[0][2]
+
+
+def test_description_from_later_sweep_rescored_and_emailed(s, tmp_path):
+    conn = db.connect(tmp_path / "jobs.db")
+    s.target_companies, s.email_cutoff = [], 30
+    li = lambda conn, s: {**no_linkedin(conn, s), "jobs": [{**jobspy_src.normalize.from_jobspy(jobspy_row(7, description=None)),
+                                                          "source": "linkedin"}]}
+    pipeline.run(False, s, conn, lambda s: ([], {}, {}), fake_feed, send=lambda *a: None, fetch_linkedin=li)
+    job_id = conn.execute("SELECT id FROM jobs").fetchone()[0]
+    sent = []
+    later = lambda conn, s: {**no_linkedin(conn, s), "refreshed": {job_id: {"description": "Jira, Agile. 3 days in office",
+                                                                           "work_model": "hybrid"}}}
+    r = pipeline.run(False, s, conn, lambda s: ([], {}, {}), fake_feed, send=lambda *a: sent.append(a), fetch_linkedin=later)
+    row = conn.execute("SELECT * FROM jobs").fetchone()
+    assert row["score_partial"] == 0 and row["prescore_keywords"] == 20 and row["emailed_at"]  # 2 of 10 for full marks
+    assert r["emailed"] == 1 and "partial" not in sent[0][2]
+
+
+def test_old_database_gets_new_columns(tmp_path):
+    import sqlite3
+    p = tmp_path / "old.db"
+    old = sqlite3.connect(p)
+    old.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_job_id TEXT, url TEXT, "
+                "found_at TEXT, fingerprint TEXT, duplicate_of INTEGER)")
+    old.commit(); old.close()
+    cols = {r["name"] for r in db.connect(p).execute("PRAGMA table_info(jobs)")}
+    assert {"score_partial", "description_tries"} <= cols

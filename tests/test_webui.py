@@ -94,7 +94,8 @@ def test_api_jobs_date_filter_and_config_roundtrip(server):
     assert cfg["SCORE_WEIGHT_KEYWORDS"] == 0.6 and cfg["KEYWORD_FULL_MARKS"] == 8
 
     code, pv = call(server + "/api/preview", {"SCORE_WEIGHT_KEYWORDS": 0.5, "KEYWORD_FULL_MARKS": 1, "email_cutoff": 90})
-    assert pv["jobs"] == [{"id": 1, "title": "Project Manager", "company": None, "old": 37, "new": 100.0, "emailed": True}]
+    assert pv["jobs"] == [{"id": 1, "title": "Project Manager", "company": None, "old": 37, "new": 100.0,
+                           "partial": False, "emailed": True}]
 
     assert call(server + "/api/config", {**GOOD, "EMAIL_TO": "bad"})[0] == 400
 

@@ -106,6 +106,7 @@ textarea { font: inherit; resize: vertical; }
 .status { font-size: 13px; }
 .status.ok { color: var(--pass); } .status.bad { color: var(--fail); }
 .preview { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 10px; }
+.pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 .delta.up { color: var(--pass); } .delta.down { color: var(--fail); }
 </style>
 </head>
@@ -149,12 +150,14 @@ textarea { font: inherit; resize: vertical; }
       <tbody id="rows"><tr><td colspan="9" class="empty">Loading jobs…</td></tr></tbody>
     </table>
   </div>
+  <nav class="pager" id="pg-jobs" aria-label="Job pages" hidden></nav>
   <details class="runs">
     <summary>Recent runs and source errors</summary>
     <div class="tablebox"><table>
       <thead><tr><th>Run</th><th>Started</th><th>Found by source</th><th>New</th><th>Passed</th><th>Emailed</th><th>Errors</th></tr></thead>
       <tbody id="runs"></tbody>
     </table></div>
+    <nav class="pager" id="pg-runs" aria-label="Run pages" hidden></nav>
   </details>
 </main>
 
@@ -228,6 +231,18 @@ textarea { font: inherit; resize: vertical; }
           <span class="hint" id="pw-hint"></span>
         </div>
         <label class="check"><input type="checkbox" id="send-empty"> Send an email even when a run finds no new matches</label>
+        <label class="check"><input type="checkbox" id="send-partial"> Also email jobs that pass but have no description, tagged <em>partial score</em></label>
+        <span class="hint">Without a description the score is title-only and keywords and dealbreakers aren't checked. Glassdoor never gives descriptions; LinkedIn jobs over the request budget get theirs in a later sweep.</span>
+      </section>
+
+      <section class="group">
+        <div><h2>Schedule</h2><p class="hint">How often the collector runs on this computer. LinkedIn is searched at most every 4 hours whatever this says.</p></div>
+        <div class="row2">
+          <div class="field"><label for="platform">Computer</label>
+            <select id="platform"><option value="mac">macOS (launchd)</option><option value="windows">Windows (Task Scheduler)</option></select></div>
+          <div class="field"><label for="hours">Run every (hours)</label><input type="number" id="hours" min="1" max="23" step="1"></div>
+        </div>
+        <span class="hint">Saving applies it to this computer, replacing the scheduled job (never adding a second one). When the interval changes, a run starts right away. For another computer, run <code id="sched-cmd"></code> there.</span>
       </section>
 
       <div class="actions">
@@ -247,6 +262,7 @@ textarea { font: inherit; resize: vertical; }
         <thead><tr><th>Job</th><th>Now</th><th>New</th><th>Emailed?</th></tr></thead>
         <tbody id="pv-rows"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
       </table></div>
+      <nav class="pager" id="pg-pv" aria-label="Preview pages" hidden></nav>
     </aside>
   </div>
 </main>
@@ -337,18 +353,19 @@ $("reasons").addEventListener("click", e => {
   render();
 });
 
-function render() {
+function render(keepPage) {
+  if (keepPage !== true) PAGES.jobs = 1;
   const q = $("q").value.trim().toLowerCase(), src = $("src").value;
   const list = JOBS.filter(j => (!active || j.g === active) && (!src || j.source === src) &&
     (!q || [j.title, j.company, j.location, j.filter_reason].join(" ").toLowerCase().includes(q)));
   $("count").textContent = `${list.length} of ${JOBS.length} jobs`;
-  $("rows").innerHTML = list.length ? list.map(j => {
+  $("rows").innerHTML = list.length ? paged("jobs", list, "jobs", render).map(j => {
     const kws = j.matched_keywords ? JSON.parse(j.matched_keywords) : [];
     return `<tr data-id="${j.id}">
       <td>${j.filter_passed ? '<span class="pill pass">passed</span>' : '<span class="pill fail">rejected</span>'}
         ${j.duplicate_of != null ? `<br><span class="pill dup">duplicate of #${j.duplicate_of}</span>` : ""}
         ${j.emailed_at ? '<br><span class="pill mail">emailed</span>' : ""}</td>
-      <td class="num">${j.prescore_total != null ? Math.round(j.prescore_total) : "–"}</td>
+      <td class="num">${j.prescore_total != null ? Math.round(j.prescore_total) : "–"}${j.score_partial ? '<br><span class="pill dup" title="No description: title-only score">partial</span>' : ""}</td>
       <td><a href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a><br><span class="co">${esc(j.company)} · #${j.id}</span>
         ${kws.length ? `<div class="kw">${esc(kws.join(", "))}</div>` : ""}
         <button class="more" data-id="${j.id}" aria-expanded="false">description</button></td>
@@ -374,17 +391,32 @@ $("rows").addEventListener("click", async e => {
   catch (err) { row.querySelector("pre").textContent = "Couldn't load: " + err.message; }
 });
 
+let RUNS = [];
 async function loadRuns() {
-  try {
-    const runs = await api("/api/runs");
-    $("runs").innerHTML = runs.map(r => {
+  try { RUNS = await api("/api/runs"); renderRuns(); }
+  catch (e) { $("runs").innerHTML = `<tr><td colspan="7" class="empty">${esc(e.message)}</td></tr>`; }
+}
+function renderRuns() {
+    $("runs").innerHTML = paged("runs", RUNS, "runs", renderRuns).map(r => {
       const errs = Object.values(JSON.parse(r.errors || "{}")).flat();
       const found = Object.entries(JSON.parse(r.jobs_found || "{}")).map(([k, v]) => `${k} ${v}`).join(", ");
       return `<tr><td class="num">${r.id}</td><td class="mono">${esc(localTime(r.started_at))}</td><td>${esc(found)}</td>
         <td class="num">${r.new_jobs ?? "–"}</td><td class="num">${r.passed_filters ?? "–"}</td><td class="num">${r.emailed ?? "–"}</td>
         <td>${errs.length ? errs.map(m => `<div class="err">${esc(m)}</div>`).join("") : "none"}</td></tr>`;
     }).join("") || `<tr><td colspan="7" class="empty">No runs yet.</td></tr>`;
-  } catch (e) { $("runs").innerHTML = `<tr><td colspan="7" class="empty">${esc(e.message)}</td></tr>`; }
+}
+
+/* ---------- pagination: 30 rows per page ---------- */
+const PER_PAGE = 30, PAGES = {};
+function paged(key, list, noun, redraw) {
+  const n = Math.max(1, Math.ceil(list.length / PER_PAGE));
+  const p = PAGES[key] = Math.min(PAGES[key] || 1, n), el = $("pg-" + key);
+  el.hidden = n <= 1;
+  el.innerHTML = `<button type="button" class="btn" data-go="${p - 1}" ${p <= 1 ? "disabled" : ""}>‹ Prev</button>
+    <span class="count">Page ${p} of ${n} · ${list.length} ${noun}</span>
+    <button type="button" class="btn" data-go="${p + 1}" ${p >= n ? "disabled" : ""}>Next ›</button>`;
+  el.onclick = e => { const b = e.target.closest("[data-go]"); if (b && !b.disabled) { PAGES[key] = Number(b.dataset.go); redraw(true); } };
+  return list.slice((p - 1) * PER_PAGE, p * PER_PAGE);
 }
 
 /* ---------- settings ---------- */
@@ -394,6 +426,7 @@ const form = () => ({
   TITLE_EXACT_SCORE: $("exact").value, TITLE_CONTAINED_SCORE: $("contained").value,
   email_cutoff: $("cutoff").value, EMAIL_FROM: $("from-addr").value, EMAIL_TO: $("to-addr").value,
   SMTP_USER: $("smtp-user").value, SMTP_APP_PASSWORD: $("pw").value, SEND_WHEN_EMPTY: $("send-empty").checked,
+  SEND_PARTIAL_SCORES: $("send-partial").checked, SCHEDULE_PLATFORM: $("platform").value, SCHEDULE_HOURS: $("hours").value,
   profile: profileForm(),
 });
 const TEXT_FIELDS = ["target_titles", "exclude_titles", "locations", "remote_in", "must_have", "dealbreakers", "excluded_companies"];
@@ -415,7 +448,8 @@ async function loadSettings() {
   $("w").value = CFG.SCORE_WEIGHT_KEYWORDS; $("full").value = CFG.KEYWORD_FULL_MARKS;
   $("exact").value = CFG.TITLE_EXACT_SCORE; $("contained").value = CFG.TITLE_CONTAINED_SCORE;
   $("cutoff").value = CFG.email_cutoff ?? ""; $("from-addr").value = CFG.EMAIL_FROM; $("to-addr").value = CFG.EMAIL_TO;
-  $("smtp-user").value = CFG.SMTP_USER; $("send-empty").checked = CFG.SEND_WHEN_EMPTY; $("pw").value = "";
+  $("smtp-user").value = CFG.SMTP_USER; $("send-empty").checked = CFG.SEND_WHEN_EMPTY;
+  $("send-partial").checked = CFG.SEND_PARTIAL_SCORES; $("platform").value = CFG.SCHEDULE_PLATFORM; $("hours").value = CFG.SCHEDULE_HOURS; schedCmd(); $("pw").value = "";
   $("pw").placeholder = CFG.has_password ? "•••••••••••••••• (saved)" : "not set";
   $("pw-hint").textContent = CFG.has_password ? "A password is saved. Leave blank to keep it." : "No password saved yet. Email won't send until you add one.";
   $("profile-path").textContent = CFG.profile_path;
@@ -442,26 +476,36 @@ async function runPreview() {
   if (d) { qs.set("from", daysAgo(Number(d))); qs.set("to", ymd(new Date())); }
   try {
     const f = form(); delete f.SMTP_APP_PASSWORD;
-    const pv = await api("/api/preview?" + qs, f);
-    const n = pv.jobs.filter(j => j.emailed).length;
-    $("pv-sum").innerHTML = `<span>passing <b>${pv.jobs.length}</b></span><span>would be emailed <b>${n}</b></span>`;
-    $("pv-rows").innerHTML = pv.jobs.map(j => {
-      const diff = Math.round(j.new) - Math.round(j.old ?? 0);
-      return `<tr><td>${esc(j.title)}<br><span class="co">${esc(j.company)}</span></td>
-        <td class="num">${j.old != null ? Math.round(j.old) : "–"}</td>
-        <td class="num">${Math.round(j.new)} <span class="delta ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff ? (diff > 0 ? "+" : "") + diff : ""}</span></td>
-        <td>${j.emailed ? '<span class="pill pass">yes</span>' : '<span class="pill fail">no</span>'}</td></tr>`;
-    }).join("") || `<tr><td colspan="4" class="empty">No passing jobs in this period.</td></tr>`;
+    PV = (await api("/api/preview?" + qs, f)).jobs; PAGES.pv = 1;
+    const n = PV.filter(j => j.emailed).length;
+    $("pv-sum").innerHTML = `<span>passing <b>${PV.length}</b></span><span>would be emailed <b>${n}</b></span>`;
+    renderPv();
   } catch (e) {
     $("pv-sum").innerHTML = ""; $("pv-rows").innerHTML = `<tr><td colspan="4" class="empty">${esc(e.message)}</td></tr>`;
   }
 }
+function renderPv() {
+    $("pv-rows").innerHTML = paged("pv", PV, "jobs", renderPv).map(j => {
+      const diff = Math.round(j.new) - Math.round(j.old ?? 0);
+      return `<tr><td>${esc(j.title)}<br><span class="co">${esc(j.company)}</span></td>
+        <td class="num">${j.old != null ? Math.round(j.old) : "–"}</td>
+        <td class="num">${Math.round(j.new)} <span class="delta ${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff ? (diff > 0 ? "+" : "") + diff : ""}</span>${j.partial ? '<br><span class="pill dup">partial</span>' : ""}</td>
+        <td>${j.emailed ? '<span class="pill pass">yes</span>' : '<span class="pill fail">no</span>'}</td></tr>`;
+    }).join("") || `<tr><td colspan="4" class="empty">No passing jobs in this period.</td></tr>`;
+}
+let PV = [];
+function schedCmd() {
+  $("sched-cmd").textContent = ($("platform").value === "windows" ? ".venv\\Scripts\\python" : ".venv/bin/python") + " -m collector schedule install";
+}
 ["w", "full", "exact", "contained", "cutoff"].forEach(id => $(id).addEventListener("input", () => { updateFormula(); schedulePreview(); }));
+$("send-partial").addEventListener("input", schedulePreview);
+$("platform").addEventListener("input", schedCmd);
 document.querySelectorAll("[data-profile]").forEach(el => el.addEventListener("input", () => { $("kw-count").textContent = kwCount(); schedulePreview(); }));
 $("pv-days").addEventListener("change", runPreview);
 $("cfg").addEventListener("submit", async e => {
   e.preventDefault(); $("save").disabled = true;
-  try { await api("/api/config", form()); await loadSettings(); status("Saved. The next run uses these settings.", true); }
+  try { const r = await api("/api/config", form()); await loadSettings();
+    status("Saved. The next run uses these settings." + (r.schedule_message ? " " + r.schedule_message : ""), !/not applied|wasn't applied/.test(r.schedule_message || "")); }
   catch (err) { status(err.message, false); $("save").disabled = false; }
 });
 $("test").addEventListener("click", async () => {

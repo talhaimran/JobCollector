@@ -1,7 +1,7 @@
 """SQLite storage."""
-import fcntl
 import json
 import sqlite3
+import os
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   fingerprint TEXT, duplicate_of INTEGER REFERENCES jobs(id),
   filter_passed INTEGER, filter_reason TEXT,
   prescore_total REAL, prescore_keywords REAL, prescore_title REAL, matched_keywords TEXT,
+  score_partial INTEGER DEFAULT 0, description_tries INTEGER DEFAULT 0,
   emailed_at TEXT, status TEXT DEFAULT 'New', run_id INTEGER REFERENCES runs(id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_source_id ON jobs(source, source_job_id);
@@ -25,13 +26,17 @@ CREATE TABLE IF NOT EXISTS runs (
   jobs_found TEXT, new_jobs INTEGER, passed_filters INTEGER, emailed INTEGER,
   errors TEXT, filters_off TEXT
 );
+CREATE TABLE IF NOT EXISTS linkedin_queries (key TEXT PRIMARY KEY, last_success TEXT);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
 """
+# columns added after the first release: (table, column, definition)
+MIGRATIONS = [("jobs", "score_partial", "INTEGER DEFAULT 0"), ("jobs", "description_tries", "INTEGER DEFAULT 0")]
 
 JOB_COLS = ["source", "source_job_id", "url", "title", "company", "location", "work_model",
             "employment_type", "salary_min", "salary_max", "salary_currency", "salary_interval",
             "posted_at", "found_at", "description", "fingerprint", "duplicate_of", "filter_passed",
             "filter_reason", "prescore_total", "prescore_keywords", "prescore_title",
-            "matched_keywords", "run_id"]
+            "matched_keywords", "score_partial", "run_id"]
 
 
 def connect(path) -> sqlite3.Connection:
@@ -39,6 +44,10 @@ def connect(path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    for table, col, ddl in MIGRATIONS:
+        if col not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {ddl}")
+    conn.commit()
     return conn
 
 
@@ -48,8 +57,13 @@ def run_lock(path):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:  # BlockingIOError on macOS/Linux, PermissionError on Windows
             yield False
             return
         yield True
@@ -88,6 +102,12 @@ def insert_job(conn, job: dict) -> int:
     return cur.lastrowid
 
 
+def update_job(conn, job_id, fields: dict):
+    fields = {k: json.dumps(v) if k == "matched_keywords" and v is not None and not isinstance(v, str) else v
+              for k, v in fields.items()}
+    conn.execute(f"UPDATE jobs SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?", (*fields.values(), job_id))
+
+
 def mark_emailed(conn, ids, ts):
     conn.executemany("UPDATE jobs SET emailed_at = ? WHERE id = ?", [(ts, i) for i in ids])
     conn.commit()
@@ -100,3 +120,13 @@ def last_runs(conn, n=10):
 def posted_found_pairs(conn):
     return conn.execute("SELECT source, posted_at, found_at FROM jobs WHERE posted_at IS NOT NULL "
                         "AND duplicate_of IS NULL").fetchall()
+
+
+def kv_get(conn, key, default=None):
+    row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def kv_set(conn, key, value):
+    conn.execute("INSERT INTO kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 (key, str(value)))
