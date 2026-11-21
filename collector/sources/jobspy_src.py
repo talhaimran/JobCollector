@@ -26,9 +26,10 @@ def search_titles(targets: list[str]) -> list[str]:
 
 
 def build_queries(settings) -> list[dict]:
-    """One query per search title x location, plus one remote query per title x 'Remote in' country."""
+    """One query per search title x search location, plus one remote query per title x 'Remote in' country."""
     titles = search_titles(settings.target_titles)
-    qs = [{"title": t, "location": loc, "remote": False} for t in titles for loc in settings.locations]
+    qs = [{"title": t, "location": loc, "remote": False, "distance": settings.radius()}
+          for t in titles for loc in settings.search_where()]
     qs += [{"title": t, "location": c, "remote": True} for t in titles for c in settings.remote_in]
     return qs
 
@@ -37,6 +38,8 @@ def scrape_kwargs(site: str, q: dict) -> dict:
     kw = dict(site_name=[site], search_term=q["title"], location=q["location"],
               results_wanted=config.RESULTS_WANTED, hours_old=config.HOURS_OLD,
               country_indeed=config.COUNTRY_INDEED, verbose=0)
+    if q.get("distance"):
+        kw["distance"] = q["distance"]  # miles, for Indeed and Glassdoor
     if site == "indeed":
         # Indeed allows only one of hours_old / is_remote / job_type: keep hours_old (freshness)
         if q["remote"]:

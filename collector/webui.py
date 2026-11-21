@@ -18,7 +18,7 @@ ENV_PATH = config.ROOT / ".env"
 PAGE = Path(__file__).parent / "web" / "index.html"
 EMAIL_KEYS = ["EMAIL_FROM", "EMAIL_TO", "SMTP_USER"]
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-LIST_FIELDS = ["target_titles", "exclude_titles", "locations", "remote_in", "work_model", "employment_type",
+LIST_FIELDS = ["target_titles", "exclude_titles", "search_locations", "locations", "remote_in", "work_model", "employment_type",
                "must_have", "dealbreakers", "excluded_companies"]
 CHOICES = {"work_model": ["Remote", "Hybrid", "On-site"], "employment_type": ["Full-time", "Contract", "Part-time"]}
 SECTION = "## Job Search Settings\n"
@@ -75,6 +75,8 @@ def read_config() -> dict:
     out["email_cutoff"] = s.email_cutoff
     out["profile"] = {a: ", ".join(getattr(s, a)) for a in LIST_FIELDS}
     out["profile"]["salary_floor"] = s.salary_floor
+    out["profile"]["search_radius"] = s.search_radius
+    out["default_radius"] = settings.DEFAULT_RADIUS_MILES
     out["profile_path"] = str(config.PROFILE_PATH)
     out["profile_exists"] = config.PROFILE_PATH.exists()
     return out
@@ -136,6 +138,8 @@ def validate_profile(body: dict) -> dict:
                 raise ValueError(f"{a}: {', '.join(bad)} isn't one of {', '.join(CHOICES[a])}")
             items = [allowed[x.lower()] for x in items]
         out[a] = ", ".join(items)
+    rad = prof.get("search_radius")
+    out["search_radius"] = "" if rad in (None, "") else f"{_num(prof, 'search_radius', 1, 100, True)}"
     sal = prof.get("salary_floor")
     out["salary_floor"] = "" if sal in (None, "") else f"{_num(prof, 'salary_floor', 0, 10_000_000):g}"
     return out

@@ -67,3 +67,30 @@ def test_missing_section_raises():
 def test_bad_number_warns(caplog):
     s = settings.parse("Job Search Settings\nSalary floor (CAD/year): lots\n")
     assert s.salary_floor is None and "not a number" in caplog.text
+
+
+def test_search_locations_and_radius():
+    s = settings.parse("## Job Search Settings\nSearch locations: Kitchener ON\nSearch radius (miles): 30\n"
+                       "Locations: Kitchener ON, Waterloo ON, Cambridge ON\n")
+    assert s.search_where() == ["Kitchener ON"] and s.radius() == 30
+    assert s.locations == ["Kitchener ON", "Waterloo ON", "Cambridge ON"]
+    assert "search locations" not in s.filters_off() and "search radius" not in s.filters_off()
+    blank = settings.parse("## Job Search Settings\nLocations: Waterloo ON, Guelph ON\n")
+    assert blank.search_where() == ["Waterloo ON", "Guelph ON"] and blank.radius() == settings.DEFAULT_RADIUS_MILES
+    added = settings.set_value("## Job Search Settings\nLocations: A\n", "search_radius", "40")
+    assert "Search radius (miles): 40" in added and settings.parse(added).radius() == 40
+
+
+def test_search_uses_search_locations_filter_uses_accepted_cities():
+    from collector import filters
+    from collector.sources import jobspy_src, linkedin
+    s = settings.Settings(target_titles=["Project Manager"], search_locations=["Kitchener ON"], search_radius=30,
+                          locations=["Kitchener ON", "Waterloo ON"], remote_in=["Canada"], work_model=["Hybrid", "Remote"])
+    qs = jobspy_src.build_queries(s)
+    assert [(q["location"], q.get("distance")) for q in qs] == [("Kitchener ON", 30), ("Canada", None)]
+    assert jobspy_src.scrape_kwargs("glassdoor", qs[0])["distance"] == 30
+    assert jobspy_src.scrape_kwargs("indeed", qs[0])["distance"] == 30
+    assert linkedin._params(linkedin.build_queries(s)[0], 3600, 0)["distance"] == 30
+    job = {"title": "Project Manager", "work_model": "hybrid", "description": ""}
+    assert filters.check({**job, "location": "Waterloo, ON, Canada"}, s)[0]
+    assert not filters.check({**job, "location": "Guelph, ON, Canada"}, s)[0]  # inside the radius, not accepted

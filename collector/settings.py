@@ -10,6 +10,8 @@ log = logging.getLogger(__name__)
 LABELS = {
     "target titles": "target_titles",
     "exclude titles": "exclude_titles",
+    "search locations": "search_locations",
+    "search radius": "search_radius",
     "locations": "locations",
     "remote in": "remote_in",
     "work model": "work_model",
@@ -23,6 +25,9 @@ LABELS = {
     "email cutoff": "email_cutoff",
 }
 SYSTEMS = {"greenhouse", "lever", "ashby"}
+NOT_FILTERS = {"base_resume", "search_locations", "search_radius"}  # blank doesn't switch a filter off
+DEFAULT_RADIUS_MILES = 25
+NEW_LINE_LABELS = {"search_radius": "Search radius (miles)", "salary_floor": "Salary floor (CAD/year)"}
 
 
 @dataclass
@@ -36,7 +41,9 @@ class TargetCompany:
 class Settings:
     target_titles: list = field(default_factory=list)
     exclude_titles: list = field(default_factory=list)
-    locations: list = field(default_factory=list)
+    search_locations: list = field(default_factory=list)  # where boards search (radius-based); blank = locations
+    search_radius: float | None = None                    # miles; blank = DEFAULT_RADIUS_MILES
+    locations: list = field(default_factory=list)         # accepted cities for hybrid / on-site jobs
     remote_in: list = field(default_factory=list)
     work_model: list = field(default_factory=list)
     employment_type: list = field(default_factory=list)
@@ -52,7 +59,13 @@ class Settings:
         """Settings left blank, i.e. filters/features that are switched off."""
         names = {v: k for k, v in LABELS.items()}
         return [names[a] for a in LABELS.values()
-                if a != "base_resume" and getattr(self, a) in (None, [], "")]
+                if a not in NOT_FILTERS and getattr(self, a) in (None, [], "")]
+
+    def search_where(self) -> list[str]:
+        return self.search_locations or self.locations
+
+    def radius(self) -> int:
+        return int(self.search_radius or DEFAULT_RADIUS_MILES)
 
 
 def _is_heading(line: str) -> bool:
@@ -103,7 +116,7 @@ def parse(text: str) -> Settings:
         if attr is None:
             log.warning("Unknown setting label %r ignored", label.strip())
             continue
-        if attr == "salary_floor" or attr == "email_cutoff":
+        if attr in ("salary_floor", "email_cutoff", "search_radius"):
             setattr(s, attr, _number(label, value))
         elif attr == "base_resume":
             s.base_resume = value or None
@@ -135,7 +148,7 @@ def set_value(text: str, attr: str, value: str) -> str:
                 prefix = lines[i][:lines[i].index(":") + 1]
                 lines[i] = f"{prefix} {value}".rstrip() + "\n"
                 return "".join(lines)
-    label = {v: k for k, v in LABELS.items()}[attr].capitalize()
+    label = NEW_LINE_LABELS.get(attr) or {v: k for k, v in LABELS.items()}[attr].capitalize()
     while end > start + 1 and not lines[end - 1].strip():
         end -= 1  # insert before the blank lines that precede the next heading
     if lines and not lines[end - 1].endswith("\n"):

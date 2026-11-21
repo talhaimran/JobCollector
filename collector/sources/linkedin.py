@@ -108,8 +108,8 @@ def parse_detail(html: str) -> dict:
 
 # --- queries and state ----------------------------------------------------------
 def build_queries(s) -> list[dict]:
-    locations = config.LINKEDIN_SEARCH_LOCATIONS or s.locations
-    qs = [{"title": t, "location": l, "remote": False} for t in search_titles(s.target_titles) for l in locations]
+    qs = [{"title": t, "location": l, "remote": False, "distance": s.radius()}
+          for t in search_titles(s.target_titles) for l in s.search_where()]
     qs += [{"title": t, "location": c, "remote": True} for t in search_titles(s.target_titles) for c in s.remote_in]
     for q in qs:
         q["key"] = f"{q['title']}|{q['location']}|{'remote' if q['remote'] else 'local'}"
@@ -121,7 +121,7 @@ def _params(q, since_seconds, start):
     if q["remote"]:
         p["f_WT"] = "2"
     else:
-        p["distance"] = config.LINKEDIN_DISTANCE_MILES
+        p["distance"] = q["distance"]
     return p
 
 

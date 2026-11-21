@@ -28,11 +28,19 @@ On Windows use `py -m venv .venv`, `.venv\Scripts\pip` and `.venv\Scripts\python
 | `SEND_WHEN_EMPTY` | `true` to get an email even with 0 matches (default `false`) |
 | `SEND_PARTIAL_SCORES` | `true` to also email passing jobs that have no description, tagged *partial score* (default `false`) |
 | `LINKEDIN_MIN_HOURS`, `LINKEDIN_REQUEST_BUDGET` | at most one LinkedIn sweep per 4 h, at most 40 requests each (defaults) |
-| `LINKEDIN_SEARCH_LOCATIONS`, `LINKEDIN_DISTANCE_MILES` | where LinkedIn searches (blank = your Locations) and the radius (default 25 miles) |
 | `SCHEDULE_PLATFORM`, `SCHEDULE_HOURS` | `mac` or `windows`, and how often to run (default 2 h); also on the settings page |
 | `SCORE_WEIGHT_KEYWORDS`, `KEYWORD_FULL_MARKS`, `TITLE_EXACT_SCORE`, `TITLE_CONTAINED_SCORE` | pre-score tuning (defaults 0.7, 10, 100, 70); easiest to set from the settings page |
 
-Only the `## Job Search Settings` section of the profile is read. You can edit it on the settings page (see below), which also creates the profile if you don't have one. Leaving a setting blank turns that filter off, and each email lists the filters that were off.
+Only the `## Job Search Settings` section of the profile is read.
+
+**Searching vs accepting a location.** Two separate settings:
+
+| Profile line | Settings page | Used for |
+|---|---|---|
+| `Search locations: Kitchener ON` and `Search radius (miles): 25` | Search locations, Search radius | Where LinkedIn, Indeed and Glassdoor look. Each board applies the radius itself, so one city also covers its neighbours. Blank search locations fall back to Locations; a blank radius means 25 miles. |
+| `Locations: Kitchener ON, Waterloo ON, Cambridge ON` | Accepted cities | The filter: hybrid and on-site jobs pass only in one of these cities. |
+
+Search wide, accept narrowly. Jobs from inside the radius but outside your accepted cities (Guelph, Brantford, ...) are saved and shown in the audit as "Location not in your cities", so you can spot a city worth adding. You can edit it on the settings page (see below), which also creates the profile if you don't have one. Leaving a setting blank turns that filter off, and each email lists the filters that were off.
 
 ## Commands
 
@@ -59,7 +67,7 @@ LinkedIn rate-limits hard (429 "blocked" after a few dozen requests), so it has 
 - **Search pages:** newest first, 10 jobs each, until a page has nothing new.
 - **Job pages (descriptions) only for new jobs that pass** title, location, work model and company checks. Jobs over the budget are saved without a description and fetched next sweep (up to 3 tries).
 - **The first 429 ends the sweep** with no retries, and the next sweep waits twice as long (up to 24 h). A clean sweep goes back to 4 h.
-- One city plus a radius covers its neighbours: `LINKEDIN_SEARCH_LOCATIONS=Kitchener ON` with 25 miles includes Waterloo and Cambridge. Your Locations still decide which hybrid and on-site jobs pass.
+- Searches use your Search locations and radius, like Indeed and Glassdoor.
 
 In the `runs` table, LinkedIn's count is new jobs only (known ones are dropped before parsing).
 
@@ -81,7 +89,7 @@ Taken from the source's own field when there is one, then the title and location
    3. target titles (whole word)
    4. work model and location:
       - Remote jobs pass unless their location names a country outside "Remote in".
-      - Hybrid and on-site jobs must match one of your "Locations".
+      - Hybrid and on-site jobs must match one of your "Locations" (accepted cities).
       - Jobs with an unknown work model must match a location and are flagged in the email.
       - Work models you didn't list (e.g. on-site) fail.
    5. employment type (an unknown type passes)

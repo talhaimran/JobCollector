@@ -18,3 +18,5 @@ def default_scoring(monkeypatch):
     monkeypatch.setattr(config, "SCORE_WEIGHTS", {"keywords": d["SCORE_WEIGHT_KEYWORDS"], "title": 1 - d["SCORE_WEIGHT_KEYWORDS"]})
     for k in ("KEYWORD_FULL_MARKS", "TITLE_EXACT_SCORE", "TITLE_CONTAINED_SCORE"):
         monkeypatch.setattr(config, k, d[k])
+    monkeypatch.setattr(config, "SEND_PARTIAL_SCORES", False)  # also off by default, whatever .env says
+    monkeypatch.setattr(config, "SEND_WHEN_EMPTY", False)
