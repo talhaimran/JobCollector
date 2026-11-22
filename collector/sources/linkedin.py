@@ -4,8 +4,8 @@ One sweep at most every LINKEDIN_MIN_HOURS. Each sweep:
 1. fetches job pages for jobs saved without a description last time (oldest first),
 2. runs the searches whose last success is oldest, newest jobs first, stopping at the first known job,
 3. fetches job pages only for new jobs that pass the filters a description can't change.
-Every request counts against LINKEDIN_REQUEST_BUDGET. The first 429 ends the sweep and doubles the wait
-before the next one (up to LINKEDIN_MAX_HOURS); a clean sweep resets it.
+Every request counts against LINKEDIN_REQUEST_BUDGET. The first 429 ends the sweep; the next one comes after
+the usual LINKEDIN_MIN_HOURS (a blocked sweep costs only a request or two, so there's no back-off).
 """
 import logging
 import random
@@ -129,8 +129,7 @@ def due(conn, now) -> tuple[bool, datetime | None]:
     last = db.kv_get(conn, "linkedin_last_sweep")
     if not last:
         return True, None
-    wait = float(db.kv_get(conn, "linkedin_wait_hours", config.LINKEDIN_MIN_HOURS))
-    nxt = normalize.parse_dt(last) + timedelta(hours=wait)
+    nxt = normalize.parse_dt(last) + timedelta(hours=config.LINKEDIN_MIN_HOURS)
     return now >= nxt, nxt
 
 
@@ -183,15 +182,11 @@ def sweep(conn, s, now=None, get=None, sleep=time.sleep) -> dict:
         blocked = str(e)
     except requests.RequestException as e:
         out["errors"].append(f"linkedin: {type(e).__name__}: {str(e)[:200]}")
-    wait = float(db.kv_get(conn, "linkedin_wait_hours", config.LINKEDIN_MIN_HOURS))
     if blocked:
-        wait = min(wait * 2, config.LINKEDIN_MAX_HOURS)
-        out["errors"].append(f"linkedin: blocked ({blocked}) after {client.used} requests; next sweep in {wait:g} h")
+        out["errors"].append(f"linkedin: blocked ({blocked}) after {client.used} requests; "
+                             f"next sweep in {config.LINKEDIN_MIN_HOURS:g} h")
         log.warning(out["errors"][-1])
-    else:
-        wait = config.LINKEDIN_MIN_HOURS
     db.kv_set(conn, "linkedin_last_sweep", now.isoformat())
-    db.kv_set(conn, "linkedin_wait_hours", wait)
     conn.commit()
     log.info("linkedin: %d requests used, %d new jobs, %d job pages refreshed",
              client.used, out["found"], sum(1 for v in out["refreshed"].values() if v))
