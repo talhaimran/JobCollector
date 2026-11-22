@@ -85,7 +85,10 @@ def test_budget_leaves_rest_pending_and_waits_min_hours(conn, s, monkeypatch):
     fake = FakeLinkedIn()
     out = run(conn, s, fake)
     assert len(fake.calls) == 6 and not out["errors"]
-    assert sum(1 for j in out["jobs"] if j.get("description")) == 3  # 3 searches + 3 job pages
+    # Kitchener p1, 4 job pages, then Canada p1 (its reserved request); Kitchener p2 waits for next sweep
+    assert sum(1 for j in out["jobs"] if j.get("description")) == 4
+    assert [c[1]["location"] for c in fake.calls if c[0] == linkedin.SEARCH] == ["Kitchener ON", "Canada"]
+    assert [r[0] for r in conn.execute("SELECT key FROM linkedin_queries")] == ["Project Manager|Canada|remote"]
     assert run(conn, s, fake, NOW + timedelta(hours=3))["skipped"]  # min 4 h between sweeps
     assert not run(conn, s, fake, NOW + timedelta(hours=4))["skipped"]
 
@@ -95,12 +98,12 @@ def test_oldest_query_first_and_window_since_last_success(conn, s, monkeypatch):
     run(conn, s, FakeLinkedIn())  # budget ends after page 1 of Kitchener: not a success
     assert conn.execute("SELECT COUNT(*) FROM linkedin_queries").fetchone()[0] == 0
     monkeypatch.setattr(config, "LINKEDIN_REQUEST_BUDGET", 2)
-    run(conn, s, FakeLinkedIn(), NOW + timedelta(hours=4))   # Kitchener: 2 pages, done
+    run(conn, s, FakeLinkedIn(), NOW + timedelta(hours=4))   # Kitchener p1, then Canada p1 (reserved): Canada done
     keys = [r[0] for r in conn.execute("SELECT key FROM linkedin_queries")]
-    assert keys == ["Project Manager|Kitchener ON|local"]
+    assert keys == ["Project Manager|Canada|remote"]
     fake = FakeLinkedIn()
     run(conn, s, fake, NOW + timedelta(hours=8))
-    assert fake.calls[0][1]["location"] == "Canada"   # never-run query goes before the one that just ran
+    assert fake.calls[0][1]["location"] == "Kitchener ON"  # never finished, so it goes before the one that did
     assert fake.calls[0][1]["f_TPR"] == f"r{24 * 3600 + 3600}"
 
 
@@ -121,3 +124,20 @@ def test_pending_descriptions_fetched_first(conn, s):
     assert fake.calls[0][0] == "https://www.linkedin.com/jobs/view/1"
     assert "Jira" in out["refreshed"][1]["description"]
     assert conn.execute("SELECT description_tries FROM jobs").fetchone()[0] == 1
+
+
+def test_job_pages_follow_their_search_page(conn, s, monkeypatch):
+    monkeypatch.setattr(config, "LINKEDIN_REQUEST_BUDGET", 100)
+    fake = FakeLinkedIn()
+    run(conn, s, fake)
+    kinds = ["search" if c[0] == linkedin.SEARCH else "job" for c in fake.calls]
+    # page 1, its 9 passing jobs, page 2, its 3 jobs, then the remote search (nothing new, so one page)
+    assert kinds == ["search"] + ["job"] * 9 + ["search"] + ["job"] * 3 + ["search"]
+
+
+def test_block_keeps_jobs_from_finished_pages(conn, s, monkeypatch):
+    monkeypatch.setattr(config, "LINKEDIN_REQUEST_BUDGET", 100)
+    out = run(conn, s, FakeLinkedIn(block_after=10))  # page 1 + its 9 job pages, then page 2 is blocked
+    assert "blocked" in out["errors"][0]
+    assert len(out["jobs"]) == 10 and sum(1 for j in out["jobs"] if j.get("description")) == 9
+    assert conn.execute("SELECT COUNT(*) FROM linkedin_queries").fetchone()[0] == 0  # unfinished: first next time

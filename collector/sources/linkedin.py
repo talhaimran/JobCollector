@@ -2,8 +2,9 @@
 
 One sweep at most every LINKEDIN_MIN_HOURS. Each sweep:
 1. fetches job pages for jobs saved without a description last time (oldest first),
-2. runs the searches whose last success is oldest, newest jobs first, stopping at the first known job,
-3. fetches job pages only for new jobs that pass the filters a description can't change.
+2. runs the searches whose last success is oldest. After each search page it fetches the job pages of that
+   page's new jobs that pass the filters a description can't change, then moves on to the next page or search.
+   Job pages stop when the budget left only covers page 1 of each search still to come.
 Every request counts against LINKEDIN_REQUEST_BUDGET. The first 429 ends the sweep; the next one comes after
 the usual LINKEDIN_MIN_HOURS (a blocked sweep costs only a request or two, so there's no back-off).
 """
@@ -162,20 +163,16 @@ def sweep(conn, s, now=None, get=None, sleep=time.sleep) -> dict:
         # 2. searches, least recently successful first
         last = {r["key"]: r["last_success"] for r in conn.execute("SELECT * FROM linkedin_queries")}
         queries = sorted(build_queries(s), key=lambda q: last.get(q["key"]) or "")
-        need_detail = []
-        for q in queries:
+        for i, q in enumerate(queries):
             since = normalize.parse_dt(last[q["key"]]) if last.get(q["key"]) else now - timedelta(hours=config.HOURS_OLD)
             seconds = int((now - since).total_seconds()) + 3600  # one hour of overlap
-            new = _search(conn, client, q, min(seconds, 30 * 86400), out["jobs"])
-            out["found"] += len(new)
-            log.info("linkedin: %s @ %s%s -> %d new", q["title"], q["location"], " (remote)" if q["remote"] else "", len(new))
+            new, done = _search(conn, client, s, q, min(seconds, 30 * 86400), out, later_searches=len(queries) - i - 1)
+            log.info("linkedin: %s @ %s%s -> %d new%s", q["title"], q["location"], " (remote)" if q["remote"] else "",
+                     new, "" if done else " (more pages next sweep)")
+            if not done:
+                continue  # not a success: it goes first next sweep, from the same start time
             conn.execute("INSERT INTO linkedin_queries(key, last_success) VALUES (?, ?) "
                          "ON CONFLICT(key) DO UPDATE SET last_success = excluded.last_success", (q["key"], now.isoformat()))
-            out["jobs"] += new
-            # 3. job pages only for jobs a description could still let through
-            need_detail += [j for j in new if filters.check(j, s)[0]]
-        for j in need_detail:
-            j.update(_detail(client, j["url"], j["title"], j["location"], j["work_model"] == "remote"))
     except OutOfBudget:
         log.info("linkedin: request budget of %d used; the rest waits for the next sweep", config.LINKEDIN_REQUEST_BUDGET)
     except Blocked as e:
@@ -193,21 +190,31 @@ def sweep(conn, s, now=None, get=None, sleep=time.sleep) -> dict:
     return out
 
 
-def _search(conn, client, q, seconds, already) -> list[dict]:
-    """New jobs for one query: pages newest first, until a page brings nothing new or runs short.
-    (Not 'stop at the first known job': promoted posts aren't in date order.)"""
-    known = {j["source_job_id"] for j in already}
-    new = []
+def _search(conn, client, s, q, seconds, out, later_searches) -> int:
+    """One query: pages newest first, until a page brings nothing new or runs short
+    (not 'stop at the first known job': promoted posts aren't in date order).
+    Each page's new jobs go into out["jobs"] at once, so a later block or budget end keeps them;
+    their job pages are fetched before the next page. Returns (new jobs found, finished all its pages)."""
+    known = {j["source_job_id"] for j in out["jobs"]}
+    found = 0
     for page in range(config.LINKEDIN_MAX_PAGES):
+        if page and client.left <= later_searches:
+            return found, False  # the rest of the budget is for page 1 of the later searches
         r = client.get(SEARCH, _params(q, seconds, page * PER_PAGE))
         cards = parse_cards(r.text, q["remote"])
         fresh = [j for j in cards if j["source_job_id"] not in known
                  and not db.seen(conn, j["source"], j["source_job_id"], j["url"])]
         known.update(j["source_job_id"] for j in fresh)
-        new += fresh
+        out["jobs"] += fresh
+        out["found"] += len(fresh)
+        found += len(fresh)
+        for j in fresh:
+            # keep one request for page 1 of every later search; skipped jobs get theirs next sweep
+            if client.left > later_searches and filters.check(j, s)[0]:
+                j.update(_detail(client, j["url"], j["title"], j["location"], j["work_model"] == "remote"))
         if not fresh or len(cards) < PER_PAGE:
             break
-    return new
+    return found, True
 
 
 def _detail(client, url, title, location, remote) -> dict:
