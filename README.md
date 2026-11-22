@@ -66,7 +66,7 @@ LinkedIn rate-limits hard (429 "blocked" after a few dozen requests), so it has 
 - **Order:** first the job pages of jobs still missing a description, then the searches whose last success is oldest. A search that didn't finish stays oldest, so it goes first next time. Each search covers the time since its own last success plus an hour, so a skipped search misses nothing.
 - **Search pages:** newest first, 10 jobs each, until a page has nothing new.
 - **Job pages (descriptions) only for new jobs that pass** title, location, work model and company checks. Jobs over the budget are saved without a description and fetched next sweep (up to 3 tries).
-- **The first 429 ends the sweep** with no retries, and the next sweep waits twice as long (up to 24 h). A clean sweep goes back to 4 h.
+- **The first 429 ends the sweep** with no retries. The next sweep comes after the usual 4 h; there's no growing back-off, since a blocked sweep costs only a request or two.
 - Searches use your Search locations and radius, like Indeed and Glassdoor.
 
 In the `runs` table, LinkedIn's count is new jobs only (known ones are dropped before parsing).

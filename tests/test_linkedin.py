@@ -104,13 +104,13 @@ def test_oldest_query_first_and_window_since_last_success(conn, s, monkeypatch):
     assert fake.calls[0][1]["f_TPR"] == f"r{24 * 3600 + 3600}"
 
 
-def test_429_stops_sweep_and_doubles_wait(conn, s):
-    out = run(conn, s, FakeLinkedIn(block_after=1))
-    assert "blocked" in out["errors"][0] and "8 h" in out["errors"][0]
-    assert run(conn, s, FakeLinkedIn(), NOW + timedelta(hours=5))["skipped"]
-    out = run(conn, s, FakeLinkedIn(), NOW + timedelta(hours=8))
+def test_429_stops_sweep_and_retries_after_the_usual_wait(conn, s):
+    fake = FakeLinkedIn(block_after=1)
+    out = run(conn, s, fake)
+    assert len(fake.calls) == 2 and "blocked" in out["errors"][0] and "4 h" in out["errors"][0]
+    assert run(conn, s, FakeLinkedIn(), NOW + timedelta(hours=3))["skipped"]
+    out = run(conn, s, FakeLinkedIn(), NOW + timedelta(hours=4))  # no back-off after a block
     assert not out["skipped"] and not out["errors"]
-    assert db.kv_get(conn, "linkedin_wait_hours") == "4.0"  # clean sweep resets the wait
 
 
 def test_pending_descriptions_fetched_first(conn, s):
