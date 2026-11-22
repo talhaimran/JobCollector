@@ -64,8 +64,8 @@ LinkedIn rate-limits hard (429 "blocked" after a few dozen requests), so it has 
 - **At most one sweep every 4 hours** (`LINKEDIN_MIN_HOURS`), whatever the run schedule.
 - **At most 40 requests per sweep** (`LINKEDIN_REQUEST_BUDGET`): search pages and job pages both count. 5–12 s between requests.
 - **Order:** first the job pages of jobs still missing a description, then the searches whose last success is oldest. A search that didn't finish stays oldest, so it goes first next time. Each search covers the time since its own last success plus an hour, so a skipped search misses nothing.
-- **Search pages:** newest first, 10 jobs each, until a page has nothing new.
-- **Job pages (descriptions) only for new jobs that pass** title, location, work model and company checks. Jobs over the budget are saved without a description and fetched next sweep (up to 3 tries).
+- **Search page, then its job pages:** each search page (10 jobs, newest first) is followed straight away by the job pages (descriptions) of its new jobs that pass the title, location, work model and company checks, then the next page or search. A search stops at the first page with nothing new. Jobs from finished pages are kept even if a later request is blocked.
+- **Every search gets at least its first page:** job pages and extra pages stop once the budget left only covers page 1 of each search still to come. Jobs left without a description are saved and fetched first next sweep (up to 3 tries). A search cut short goes first next sweep.
 - **The first 429 ends the sweep** with no retries. The next sweep comes after the usual 4 h; there's no growing back-off, since a blocked sweep costs only a request or two.
 - Searches use your Search locations and radius, like Indeed and Glassdoor.
 
