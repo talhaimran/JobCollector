@@ -1,48 +1,113 @@
-# Job Collector (Phase 1)
+# JobCollector: Self-Hosted Job Search Automation for LinkedIn, Indeed and Glassdoor
 
-Every 2 hours this collector finds job postings from the last 24 hours, filters them and gives each a keyword pre-score. It uses no AI. Every job goes into SQLite, and new matches are emailed to you. It never logs in to any site.
+**Get the jobs that match you emailed every 2 hours, from LinkedIn, Indeed, Glassdoor and company career pages. No login, no AI, no subscription.**
 
-**Sources:** LinkedIn (its own client, see below), JobSpy (Indeed, Glassdoor) and the public Greenhouse, Lever and Ashby feeds of your "Target companies". ZipRecruiter and hiring.cafe block scripts outright, and Google for Jobs needs a real browser, so they aren't used.
+[![tests](https://github.com/talhaimran/JobCollector/actions/workflows/tests.yml/badge.svg)](https://github.com/talhaimran/JobCollector/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![SQLite](https://img.shields.io/badge/storage-SQLite-003B57.svg?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#scheduling-macos-or-windows)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
 
-Runs on macOS and Windows.
+## Table of Contents
 
-## Setup
+- [Why use JobCollector?](#why-use-jobcollector)
+- [Features](#features)
+- [Tech stack](#tech-stack)
+- [Quick start](#quick-start)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [How it works](#how-it-works)
+  - [LinkedIn](#linkedin)
+  - [Pipeline](#pipeline)
+  - [How the pre-score works](#how-the-pre-score-works)
+- [Audit and settings page](#audit-and-settings-page)
+- [Scheduling (macOS or Windows)](#scheduling-macos-or-windows)
+- [Checking the filters](#checking-the-filters)
+- [Project layout](#project-layout)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Why use JobCollector?
+
+Checking LinkedIn, Indeed, Glassdoor and a dozen company career pages every day takes time, and the built-in job alerts are noisy: they ignore your salary floor, mix in titles you don't want and send the same reposted job three times.
+
+JobCollector is a **self-hosted job scraper and job alert tool** written in Python. Every 2 hours it collects postings from the last 24 hours, removes duplicates across sites, applies your hard filters (title, location, remote / hybrid / on-site, salary, dealbreakers), gives each job a keyword match score and **emails you only the new jobs worth reading**. Everything is stored in a local SQLite database you own, so you can see why each job was rejected.
+
+It never logs in to any site and uses no AI or paid API. It runs on your own Mac or Windows PC.
+
+## Features
+
+- **Multi-source job aggregation:** LinkedIn (its own rate-limited client), Indeed and Glassdoor via [JobSpy](https://github.com/speedyapply/JobSpy), and the public **Greenhouse, Lever and Ashby** job board feeds of the companies you name.
+- **Cross-site de-duplication:** a company + title + city fingerprint catches the same job on two boards and reposts.
+- **Hard filters:** target and excluded titles, accepted cities, "remote in" countries, work model, employment type, CAD salary floor, excluded companies and dealbreaker phrases. Every rejected job keeps its `filter_reason`.
+- **Keyword pre-score (0–100):** must-have keyword matches plus title match, with weights you tune from a live preview.
+- **Email digest:** HTML + text email over Gmail SMTP with only new, passing, non-duplicate jobs above your cutoff.
+- **Local web UI:** an audit page for every saved job and a settings page with a scoring preview, at `http://127.0.0.1:8765`.
+- **Scheduler built in:** installs itself into macOS launchd or Windows Task Scheduler.
+- **Polite by design:** request budgets, random pauses and back-off, so it doesn't get your IP blocked.
+
+Sites not used: ZipRecruiter and hiring.cafe block scripts outright, and Google for Jobs needs a real browser.
+
+## Tech stack
+
+| Area | Used |
+|---|---|
+| Language | Python 3.13 (standard library `sqlite3`, `smtplib`, `http.server`) |
+| Job boards | [python-jobspy](https://pypi.org/project/python-jobspy/) 1.4.1 (Indeed, Glassdoor), `requests` + `beautifulsoup4` (LinkedIn) |
+| Company feeds | Greenhouse, Lever and Ashby public JSON APIs |
+| Storage | SQLite (`data/jobs.db`) |
+| Config | `python-dotenv` (`.env`) + a Markdown profile (`candidate-profile.md`) |
+| Scheduling | macOS launchd, Windows Task Scheduler |
+| Tests / CI | pytest (no network, HTML/JSON fixtures), GitHub Actions |
+
+## Quick start
+
+**1. Clone and install**
 
 ```bash
-cd /path/to/JobCollector
+git clone https://github.com/talhaimran/JobCollector.git
+cd JobCollector
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-cp .env.example .env        # then edit .env
+cp .env.example .env
 ```
 
 On Windows use `py -m venv .venv`, `.venv\Scripts\pip` and `.venv\Scripts\python`, and `copy` instead of `cp`.
 
-`.env`:
+**2. Add your Gmail details to `.env`** (use a Gmail [app password](https://myaccount.google.com/apppasswords), not your real password). See [Configuration](#configuration).
 
-| key | meaning |
-|---|---|
-| `JOB_FOLDER` | folder containing `candidate-profile.md` (defaults to this project folder) |
-| `EMAIL_FROM`, `EMAIL_TO`, `SMTP_USER` | your Gmail address(es) |
-| `SMTP_APP_PASSWORD` | a Gmail **app password** (Google Account → Security → 2-Step Verification → App passwords) |
-| `RESULTS_WANTED` | results per JobSpy query (default 25) |
-| `SEND_WHEN_EMPTY` | `true` to get an email even with 0 matches (default `false`) |
-| `SEND_PARTIAL_SCORES` | `true` to also email passing jobs that have no description, tagged *partial score* (default `false`) |
-| `LINKEDIN_MIN_HOURS`, `LINKEDIN_REQUEST_BUDGET` | at most one LinkedIn sweep per 4 h, at most 40 requests each (defaults) |
-| `SCHEDULE_PLATFORM`, `SCHEDULE_HOURS` | `mac` or `windows`, and how often to run (default 2 h); also on the settings page |
-| `SCORE_WEIGHT_KEYWORDS`, `KEYWORD_FULL_MARKS`, `TITLE_EXACT_SCORE`, `TITLE_CONTAINED_SCORE` | pre-score tuning (defaults 0.7, 10, 100, 70); easiest to set from the settings page |
+**3. Describe the jobs you want.** Either open the settings page (`.venv/bin/python -m collector ui`) and fill in *Job search*, or create `candidate-profile.md`:
 
-Only the `## Job Search Settings` section of the profile is read.
+```markdown
+## Job Search Settings
+- Target titles: Project Manager, Program Manager
+- Exclude titles: Intern, Junior
+- Search locations: Kitchener ON
+- Search radius (miles): 25
+- Locations: Kitchener ON, Waterloo ON, Cambridge ON
+- Remote in: Canada
+- Work model: Remote, Hybrid
+- Employment type: Full-time
+- Salary floor (CAD/year): 90000
+- Must-have keywords: Agile, Jira, stakeholder management, AI/ML
+- Dealbreaker keywords: security clearance required
+- Excluded companies: Example Staffing Inc
+- Target companies: Example Co | greenhouse | exampleco; Acme | lever | acme
+- Email cutoff: 60
+```
 
-**Searching vs accepting a location.** Two separate settings:
+Target companies are `Name | greenhouse|lever|ashby | board-slug`, separated by `;`. Only the `## Job Search Settings` section is read. A blank setting turns that filter off, and each email lists the filters that were off.
 
-| Profile line | Settings page | Used for |
-|---|---|---|
-| `Search locations: Kitchener ON` and `Search radius (miles): 25` | Search locations, Search radius | Where LinkedIn, Indeed and Glassdoor look. Each board applies the radius itself, so one city also covers its neighbours. Blank search locations fall back to Locations; a blank radius means 25 miles. |
-| `Locations: Kitchener ON, Waterloo ON, Cambridge ON` | Accepted cities | The filter: hybrid and on-site jobs pass only in one of these cities. |
+**4. Try it, then schedule it**
 
-Search wide, accept narrowly. Jobs from inside the radius but outside your accepted cities (Guelph, Brantford, ...) are saved and shown in the audit as "Location not in your cities", so you can spot a city worth adding. You can edit it on the settings page (see below), which also creates the profile if you don't have one. Leaving a setting blank turns that filter off, and each email lists the filters that were off.
+```bash
+.venv/bin/python -m collector run --dry-run          # everything except sending; prints the email
+.venv/bin/python -m collector schedule install       # run every 2 h from now on
+```
 
-## Commands
+## Usage
 
 ```bash
 .venv/bin/python -m collector settings        # show parsed settings
@@ -56,6 +121,39 @@ Search wide, accept narrowly. Jobs from inside the radius but outside your accep
 A dry run still saves jobs to the database. Those jobs count as "seen", so a later real run won't email them again.
 
 A run searches each location and "Remote in" country once per search title. Target titles that contain another target title are not searched separately, so "Senior Project Manager" is covered by the "Project Manager" search. Indeed and Glassdoor are searched every run with a 3–8 s pause between queries. When one errors, the collector waits 30 s, then 60 s. After 3 errors in a row it skips that site for the rest of the run.
+
+## Configuration
+
+### Environment variables (`.env`)
+
+| Key | Default | Meaning |
+|---|---|---|
+| `JOB_FOLDER` | this project folder | folder containing `candidate-profile.md` |
+| `EMAIL_FROM`, `EMAIL_TO`, `SMTP_USER` | – | your Gmail address(es) |
+| `SMTP_APP_PASSWORD` | – | a Gmail **app password** (Google Account → Security → 2-Step Verification → App passwords) |
+| `RESULTS_WANTED` | `25` | results per JobSpy query |
+| `SEND_WHEN_EMPTY` | `false` | `true` to get an email even with 0 matches |
+| `SEND_PARTIAL_SCORES` | `false` | `true` to also email passing jobs that have no description, tagged *partial score* |
+| `LINKEDIN_MIN_HOURS` | `4` | at most one LinkedIn sweep per this many hours |
+| `LINKEDIN_REQUEST_BUDGET` | `40` | at most this many LinkedIn requests per sweep |
+| `SCHEDULE_PLATFORM` | `mac` | `mac` or `windows`; also on the settings page |
+| `SCHEDULE_HOURS` | `2` | how often to run; also on the settings page |
+| `SCORE_WEIGHT_KEYWORDS` | `0.7` | keyword share of the pre-score (title gets the rest) |
+| `KEYWORD_FULL_MARKS` | `10` | keyword matches that give 100 |
+| `TITLE_EXACT_SCORE`, `TITLE_CONTAINED_SCORE` | `100`, `70` | title scores; easiest to set from the settings page |
+
+### Searching vs accepting a location
+
+Two separate settings:
+
+| Profile line | Settings page | Used for |
+|---|---|---|
+| `Search locations: Kitchener ON` and `Search radius (miles): 25` | Search locations, Search radius | Where LinkedIn, Indeed and Glassdoor look. Each board applies the radius itself, so one city also covers its neighbours. Blank search locations fall back to Locations; a blank radius means 25 miles. |
+| `Locations: Kitchener ON, Waterloo ON, Cambridge ON` | Accepted cities | The filter: hybrid and on-site jobs pass only in one of these cities. |
+
+Search wide, accept narrowly. Jobs from inside the radius but outside your accepted cities (Guelph, Brantford, ...) are saved and shown in the audit as "Location not in your cities", so you can spot a city worth adding.
+
+## How it works
 
 ### LinkedIn
 
@@ -79,7 +177,7 @@ A job with no description can't be keyword-scored or checked for dealbreakers, s
 
 Taken from the source's own field when there is one, then the title and location, then the description. In the description it looks for phrases such as "3 days a week in the office", "2–3 days on-site", "days in office", "Workplace type: Hybrid", "fully remote" and "fully on-site". Five days in the office counts as on-site. Plain "hybrid" next to words like *delivery*, *cloud* or *agile* is ignored.
 
-## Pipeline
+### Pipeline
 
 1. **Normalize** every posting into one shape (see `collector/normalize.py`).
 2. **De-duplicate:** a job already stored with the same `(source, source_job_id)` or URL is skipped. Otherwise the collector builds a fingerprint from company + title + city, with suffixes like Inc and Ltd stripped. If an earlier row (from any source, reposts included) has the same fingerprint, the new row is saved with `duplicate_of` set and is never emailed.
@@ -97,9 +195,9 @@ Taken from the source's own field when there is one, then the title and location
    7. dealbreaker phrases in the title or description.
 4. **Pre-score** (0–100), for jobs that pass.
 5. **Save** everything, filtered-out jobs included.
-6. **Email** only new, passing, non-duplicate jobs scoring at least "Email cutoff". Jobs without a description wait for one, or are emailed as *partial score* if you turn that on (see LinkedIn below). A LinkedIn job whose description arrives in a later sweep is filtered and scored again then.
+6. **Email** only new, passing, non-duplicate jobs scoring at least "Email cutoff". Jobs without a description wait for one, or are emailed as *partial score* if you turn that on. A LinkedIn job whose description arrives in a later sweep is filtered and scored again then.
 
-## How the pre-score works
+### How the pre-score works
 
 ```
 keywords = min(100, matched_must_have / KEYWORD_FULL_MARKS * 100)     # default 10 matches = 100
@@ -115,17 +213,9 @@ Keywords match case-insensitively as whole words or phrases in the title and des
 
 Note that Glassdoor returns no descriptions (JobSpy 1.4.1), so Glassdoor jobs score on title only and dealbreakers are checked against the title alone.
 
-## Checking the filters
-
-```bash
-sqlite3 data/jobs.db "SELECT filter_reason, COUNT(*) FROM jobs WHERE filter_passed=0 GROUP BY 1 ORDER BY 2 DESC"
-sqlite3 data/jobs.db "SELECT title, company, location, work_model, filter_reason FROM jobs WHERE filter_passed=0 ORDER BY id DESC LIMIT 30"
-sqlite3 data/jobs.db "SELECT prescore_total, title, company, matched_keywords FROM jobs WHERE filter_passed=1 ORDER BY id DESC LIMIT 30"
-```
-
 ## Audit and settings page
 
-`.venv/bin/python -m collector ui` serves a page on `http://127.0.0.1:8765`. It listens only on your Mac and rejects requests from other sites. Stop it with Ctrl+C.
+`.venv/bin/python -m collector ui` serves a page on `http://127.0.0.1:8765`. It listens only on your own computer and rejects requests from other sites. Stop it with Ctrl+C.
 
 - **Audit**: every saved job, filtered by date found or date posted (Today, Since yesterday, 7 days, 30 days, All, or a custom range). Click a rejection reason to list those jobs, and click *description* to read the text the keyword and dealbreaker checks saw. *Recent runs* lists per-source counts and errors.
 - **Settings**: the job search settings (titles, locations, work model, salary floor, keywords, excluded companies), pre-score weights, email cutoff, Gmail addresses and app password, and *Send test email*. The app password is never sent back to the page: leave the field blank to keep the saved one. The preview re-runs the filters and scores on saved jobs with your unsaved values.
@@ -148,11 +238,19 @@ Watch the log: `tail -f logs/collector.log` (macOS) or `type logs\collector.log`
 
 A lock file (`data/collector.lock`) stops two runs from overlapping on both systems. The OS releases the lock if a run crashes. When the Mac is asleep, launchd runs the missed job once it wakes. Task Scheduler skips runs missed while Windows was off unless you tick *Run task as soon as possible after a scheduled start is missed* in the task's settings.
 
-**macOS privacy:** this project lives under `~/Documents`, which macOS protects. If `logs/collector.err.log` shows `Operation not permitted`, there are two fixes:
-- Give `.venv/bin/python`'s target (`/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13`) Full Disk Access in System Settings → Privacy & Security.
+**macOS privacy:** if the project lives under `~/Documents`, which macOS protects, and `logs/collector.err.log` shows `Operation not permitted`, there are two fixes:
+- Give `.venv/bin/python`'s target (for example `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13`) Full Disk Access in System Settings → Privacy & Security.
 - Or move the project out of `~/Documents`.
 
-## Test checklist (definition of done)
+## Checking the filters
+
+```bash
+sqlite3 data/jobs.db "SELECT filter_reason, COUNT(*) FROM jobs WHERE filter_passed=0 GROUP BY 1 ORDER BY 2 DESC"
+sqlite3 data/jobs.db "SELECT title, company, location, work_model, filter_reason FROM jobs WHERE filter_passed=0 ORDER BY id DESC LIMIT 30"
+sqlite3 data/jobs.db "SELECT prescore_total, title, company, matched_keywords FROM jobs WHERE filter_passed=1 ORDER BY id DESC LIMIT 30"
+```
+
+### Test checklist (definition of done)
 
 1. `collector settings` prints the settings from your profile correctly.
 2. `collector run --dry-run` completes and logs job counts per source in `runs`. Any source errors are logged without stopping the run.
@@ -161,7 +259,7 @@ A lock file (`data/collector.lock`) stops two runs from overlapping on both syst
 5. `jobs` shows a clear `filter_reason` for every job that was filtered out (see the queries above).
 6. The scheduled job (launchd or Task Scheduler) runs on schedule and writes to `logs/`.
 
-## Layout
+## Project layout
 
 ```
 collector/
@@ -177,7 +275,37 @@ collector/
   emailer.py       HTML + text email, Gmail SMTP
   pipeline.py      a run, end to end
   schedule.py      launchd / Task Scheduler install
+  webui.py, web/   audit + settings page
   cli.py           run / settings / report / ui / schedule
 launchd/           macOS plist template
 windows/           run-collector.cmd for Task Scheduler
+tests/             pytest suite with offline fixtures
 ```
+
+## Roadmap
+
+JobCollector is in **Phase 1**: collect, filter, keyword-score and email. Ideas for what comes next:
+
+- [ ] AI scoring of each job against your resume (the profile's `Base resume` is already parsed)
+- [ ] Salary filters in currencies other than CAD
+- [ ] More company job board feeds (Workday, SmartRecruiters, Recruitee)
+- [ ] Linux scheduling (cron / systemd timer)
+- [ ] Notifications beyond email (Slack, Telegram, Discord)
+
+Have an idea? [Open an issue](https://github.com/talhaimran/JobCollector/issues).
+
+## Contributing
+
+Bug reports, new job sources and filter improvements are welcome.
+
+1. Fork the repo and create a branch: `git checkout -b my-change`
+2. Install and run the tests: `.venv/bin/pytest -q` (they use saved fixtures and never touch the network)
+3. Add a test for your change, keep the diff small, and open a pull request.
+
+When adding a source, please respect the site's limits: no logins, a request budget and pauses between requests.
+
+## License
+
+Released under the [MIT License](LICENSE). Copyright (c) 2026 Talha Imran.
+
+This project is for personal job searching. You are responsible for following the terms of service of each site it reads from.
