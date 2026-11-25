@@ -69,7 +69,19 @@ Sites not used: ZipRecruiter and hiring.cafe block scripts outright, and Google 
 
 ## Quick start
 
-**1. Clone and install**
+No terminal needed.
+
+1. **Download** the ZIP: on GitHub click **Code → Download ZIP**, then unzip it somewhere you'll keep it and can save files, such as Documents. Not inside Program Files or Applications, or on a read-only drive: the launcher stores its setup inside that folder.
+2. **Double-click the launcher** in the unzipped folder:
+   - **Mac:** `Launch JobCollector Mac.command`. The first time, macOS blocks files from the internet: right-click it → **Open** → **Open**.
+   - **Windows:** `Launch JobCollector Windows.bat`. If SmartScreen appears, click **More info → Run anyway**.
+
+   It checks for Python 3.10 or newer (and opens the download page if it's missing), installs what it needs the first time (a few minutes, needs internet: the packages in `requirements.txt` come from [PyPI](https://pypi.org) through pip), then opens the settings page in your browser. Keep the small window open while you use the page; scheduled checks keep running after you close it.
+3. **Fill in the settings page:** the jobs you want (Search and Filters), your Gmail details (Email, with a Gmail [app password](https://myaccount.google.com/apppasswords), not your normal password) and how often to check (Schedule), then **Save settings**. Saving sets up the schedule on this computer.
+
+To open the page again later, double-click the launcher again.
+
+### For developers
 
 ```bash
 git clone https://github.com/talhaimran/JobCollector.git
@@ -79,11 +91,9 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
-On Windows use `py -m venv .venv`, `.venv\Scripts\pip` and `.venv\Scripts\python`, and `copy` instead of `cp`.
+On Windows use `py -m venv .venv`, `.venv\Scripts\pip` and `.venv\Scripts\python`, and `copy` instead of `cp`. Put your Gmail details in `.env` (see [Configuration](#configuration)).
 
-**2. Add your Gmail details to `.env`** (use a Gmail [app password](https://myaccount.google.com/apppasswords), not your real password). See [Configuration](#configuration).
-
-**3. Describe the jobs you want.** Either open the settings page (`.venv/bin/python -m collector ui`) and fill in *Job search*, or create `candidate-profile.md`:
+Describe the jobs you want on the settings page (`.venv/bin/python -m collector ui`), or in `candidate-profile.md`:
 
 ```markdown
 ## Job Search Settings
@@ -105,7 +115,7 @@ On Windows use `py -m venv .venv`, `.venv\Scripts\pip` and `.venv\Scripts\python
 
 Target companies are `Name | greenhouse|lever|ashby | board-slug`, separated by `;`. Only the `## Job Search Settings` section is read. A blank setting turns that filter off, and each email lists the filters that were off.
 
-**4. Try it, then schedule it**
+Try it, then schedule it:
 
 ```bash
 .venv/bin/python -m collector run --dry-run          # everything except sending; prints the email

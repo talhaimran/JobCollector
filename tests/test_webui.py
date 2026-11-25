@@ -154,3 +154,49 @@ def test_preview_uses_unsaved_filters(server):
     pv = call(server + "/api/preview", body)[1]
     assert [(j["id"], j["old"]) for j in pv["jobs"]] == [(2, None)]
     assert settings.load(config.PROFILE_PATH).target_titles == ["Project Manager"]
+
+
+def _hold_port(handler):
+    import threading
+    from http.server import ThreadingHTTPServer
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def test_serve_when_job_collector_already_open_opens_browser_and_returns(monkeypatch):
+    import webbrowser
+    other = _hold_port(webui.Handler)
+    port = other.server_address[1]
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    try:
+        webui.serve(port)  # must return instead of raising "Address already in use"
+    finally:
+        other.shutdown()
+    assert opened == [f"http://127.0.0.1:{port}/"]
+
+
+def test_serve_when_another_program_has_port_says_so_and_opens_nothing(monkeypatch, capsys):
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler
+
+    class Stranger(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+        def log_message(self, *a):
+            pass
+
+    other = _hold_port(Stranger)
+    port = other.server_address[1]
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    try:
+        with pytest.raises(SystemExit) as e:
+            webui.serve(port)
+    finally:
+        other.shutdown()
+    assert e.value.code == 1
+    assert opened == []
+    assert f"Port {port} is used by another program" in capsys.readouterr().out
