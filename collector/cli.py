@@ -22,6 +22,10 @@ def cmd_run(args):
         if not got:
             logging.warning("Another run is in progress (lock held); exiting")
             return
+        if moved := folder.saved_elsewhere():  # settings loaded before a folder switch finished
+            logging.warning("The data folder changed to %s while this check was starting; skipping it. "
+                            "The next check uses the new folder.", moved)
+            return
         pipeline.run(dry_run=args.dry_run)
 
 
