@@ -8,6 +8,8 @@ from .normalize import now_iso
 from .sources import feeds, jobspy_src, linkedin, randstad, roberthalf
 
 log = logging.getLogger(__name__)
+# staffing agencies rarely name the client, so company + title + city can't tell two of their jobs apart
+AGENCY_SOURCES = {"randstad", "roberthalf"}
 
 
 def collect(conn, s, fetch_jobspy, fetch_feed, fetch_linkedin, boards=None):
@@ -78,7 +80,10 @@ def process(conn, s, jobs, run_id):
     for j in jobs:
         if db.seen(conn, j["source"], j["source_job_id"], j["url"]):
             continue
-        fp = fingerprint(j["company"], j["title"], j["location"])
+        if j["source"] in AGENCY_SOURCES:
+            fp = f"{j['source']}|{j['source_job_id']}"  # shortcut: an agency's repost under a new ID is emailed again
+        else:
+            fp = fingerprint(j["company"], j["title"], j["location"])
         # duplicate if any earlier row (any source, incl. same-source reposts) has this fingerprint
         dup = db.fingerprint_owner(conn, fp)
         row = {**j, **_scored(j, s), "fingerprint": fp, "duplicate_of": dup, "run_id": run_id}

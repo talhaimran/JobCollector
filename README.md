@@ -205,7 +205,7 @@ Taken from the source's own field when there is one, then the title and location
 ### Pipeline
 
 1. **Normalize** every posting into one shape (see `collector/normalize.py`).
-2. **De-duplicate:** a job already stored with the same `(source, source_job_id)` or URL is skipped. Otherwise the collector builds a fingerprint from company + title + city, with suffixes like Inc and Ltd stripped. If an earlier row (from any source, reposts included) has the same fingerprint, the new row is saved with `duplicate_of` set and is never emailed.
+2. **De-duplicate:** a job already stored with the same `(source, source_job_id)` or URL is skipped. Otherwise the collector builds a fingerprint from company + title + city, with suffixes like Inc and Ltd stripped. If an earlier row (from any source, reposts included) has the same fingerprint, the new row is saved with `duplicate_of` set and is never emailed. Randstad and Robert Half jobs are the exception: those agencies rarely name the client, so two of their jobs with the same title and city would look identical. They're matched by their own job ID only, which means an agency repost under a new ID is emailed again.
 3. **Hard filters**, in order. The first failure is saved in `filter_reason`:
    1. excluded company
    2. exclude titles (whole word)

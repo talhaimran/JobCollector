@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from collector import config, db, emailer, pipeline
+from collector import config, db, emailer, normalize, pipeline
 from collector.settings import Settings, TargetCompany
 from collector.sources import feeds, jobspy_src, randstad, roberthalf
 
@@ -99,6 +99,17 @@ def test_cross_source_duplicate_not_emailed(s, tmp_path):
     dup = conn.execute("SELECT duplicate_of FROM jobs WHERE source='greenhouse'").fetchone()[0]
     first = conn.execute("SELECT id FROM jobs WHERE source_job_id='li-1'").fetchone()[0]
     assert dup == first and "https://gh/9" not in printed[0]
+
+
+def test_agency_jobs_with_same_title_and_city_are_not_duplicates(s, tmp_path):
+    conn = db.connect(tmp_path / "jobs.db")
+    s.target_companies = []
+    agency = lambda n: normalize._job(source="roberthalf", source_job_id=f"rh-{n}", url=f"https://rh/{n}",
+                                      title="Project Manager", company="Robert Half (client not named)",
+                                      location="Kitchener, ON, Canada", work_model="hybrid", description="Jira, Agile.")
+    pipeline.run(False, s, conn, lambda s: ([], {}, {}), lambda c: [], send=lambda *a: None, fetch_linkedin=no_linkedin,
+                 boards={"roberthalf": lambda conn, s: [agency(1), agency(2)]})
+    assert [r[0] for r in conn.execute("SELECT duplicate_of FROM jobs ORDER BY id")] == [None, None]
 
 
 def test_lock_blocks_second_run(tmp_path):
