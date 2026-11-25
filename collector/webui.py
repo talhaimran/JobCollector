@@ -1,4 +1,5 @@
 """Local audit + settings UI: `python -m collector ui`. Listens on 127.0.0.1 only."""
+import errno
 import json
 import logging
 import os
@@ -297,8 +298,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port: int = 8765, open_browser: bool = True):
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError as e:
+        if e.errno not in (errno.EADDRINUSE, 10048):  # 10048: Windows' "address in use"
+            raise
+        print(f"Job Collector is already open at {url}")  # launcher double-clicked again
+        import webbrowser
+        webbrowser.open(url)
+        return
     print(f"Collector UI on {url}  (Ctrl+C to stop)")
     if open_browser:
         import webbrowser

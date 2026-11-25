@@ -154,3 +154,19 @@ def test_preview_uses_unsaved_filters(server):
     pv = call(server + "/api/preview", body)[1]
     assert [(j["id"], j["old"]) for j in pv["jobs"]] == [(2, None)]
     assert settings.load(config.PROFILE_PATH).target_titles == ["Project Manager"]
+
+
+def test_serve_when_port_busy_opens_browser_and_returns(monkeypatch):
+    import socket
+    import webbrowser
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen()
+    port = busy.getsockname()[1]
+    opened = []
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    try:
+        webui.serve(port)  # must return instead of raising "Address already in use"
+    finally:
+        busy.close()
+    assert opened == [f"http://127.0.0.1:{port}/"]
