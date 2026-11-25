@@ -1,6 +1,6 @@
 # JobCollector: Self-Hosted Job Search Automation for LinkedIn, Indeed and Glassdoor
 
-**Get the jobs that match you emailed every 2 hours, from LinkedIn, Indeed, Glassdoor and company career pages. No login, no AI, no subscription.**
+**Get the jobs that match you emailed every 2 hours, from LinkedIn, Indeed, Glassdoor, Randstad Canada and company career pages. No login, no AI, no subscription.**
 
 [![tests](https://github.com/talhaimran/JobCollector/actions/workflows/tests.yml/badge.svg)](https://github.com/talhaimran/JobCollector/actions/workflows/tests.yml)
 [![Release](https://img.shields.io/github/v/release/talhaimran/JobCollector)](https://github.com/talhaimran/JobCollector/releases/latest)
@@ -22,6 +22,7 @@
 - [Configuration](#configuration)
 - [How it works](#how-it-works)
   - [LinkedIn](#linkedin)
+  - [Randstad Canada](#randstad-canada)
   - [Pipeline](#pipeline)
   - [How the pre-score works](#how-the-pre-score-works)
 - [Audit and settings page](#audit-and-settings-page)
@@ -42,7 +43,7 @@ It never logs in to any site and uses no AI or paid API. It runs on your own Mac
 
 ## Features
 
-- **Multi-source job aggregation:** LinkedIn (its own rate-limited client), Indeed and Glassdoor via [JobSpy](https://github.com/speedyapply/JobSpy), and the public **Greenhouse, Lever and Ashby** job board feeds of the companies you name.
+- **Multi-source job aggregation:** LinkedIn (its own rate-limited client), Indeed and Glassdoor via [JobSpy](https://github.com/speedyapply/JobSpy), Randstad Canada, and the public **Greenhouse, Lever and Ashby** job board feeds of the companies you name.
 - **Cross-site de-duplication:** a company + title + city fingerprint catches the same job on two boards and reposts.
 - **Hard filters:** target and excluded titles, accepted cities, "remote in" countries, work model, employment type, CAD salary floor, excluded companies and dealbreaker phrases. Every rejected job keeps its `filter_reason`.
 - **Keyword pre-score (0–100):** must-have keyword matches plus title match, with weights you tune from a live preview.
@@ -58,7 +59,7 @@ Sites not used: ZipRecruiter and hiring.cafe block scripts outright, and Google 
 | Area | Used |
 |---|---|
 | Language | Python 3.13 (standard library `sqlite3`, `smtplib`, `http.server`) |
-| Job boards | [python-jobspy](https://pypi.org/project/python-jobspy/) 1.4.1 (Indeed, Glassdoor), `requests` + `beautifulsoup4` (LinkedIn) |
+| Job boards | [python-jobspy](https://pypi.org/project/python-jobspy/) 1.4.1 (Indeed, Glassdoor), `requests` + `beautifulsoup4` (LinkedIn, Randstad) |
 | Company feeds | Greenhouse, Lever and Ashby public JSON APIs |
 | Storage | SQLite (`data/jobs.db`) |
 | Config | `python-dotenv` (`.env`) + a Markdown profile (`candidate-profile.md`) |
@@ -172,6 +173,16 @@ LinkedIn rate-limits hard (429 "blocked" after a few dozen requests), so it has 
 
 In the `runs` table, LinkedIn's count is new jobs only (known ones are dropped before parsing).
 
+### Randstad Canada
+
+randstad.ca's search pages carry their results as JSON, 30 per page. Its robots.txt allows the plain keyword search but not the radius, sort or date filters, so each run:
+
+- searches **Canada-wide once per search title** (`/jobs/q-project-manager/`), paging by relevance up to 5 pages (`RANDSTAD_MAX_PAGES`), 3–8 s between requests;
+- keeps jobs created in the last day; Accepted cities and Remote in do the location filtering;
+- fetches the job page for the full description, only for new jobs that pass the filters. The search results give just its first few lines.
+
+Any HTTP error (403, 429) ends Randstad for that run and is recorded in the `runs` table. The next run tries again. Most postings are Randstad's own, so the company shows as "Randstad Canada".
+
 ### Partial scores
 
 A job with no description can't be keyword-scored or checked for dealbreakers, so its score is title-only and it's marked `score_partial`. Glassdoor never gives descriptions, and LinkedIn jobs over the budget wait for theirs. By default these aren't emailed until a description arrives. Turn on `SEND_PARTIAL_SCORES` (or the checkbox on the settings page) to email them straight away, tagged *partial score*, whatever the cutoff.
@@ -271,7 +282,7 @@ collector/
   config.py        knobs: weights, delays, sites, results per query
   settings.py      Job Search Settings parser
   sources/         linkedin.py (own client, request budget), jobspy_src.py (Indeed, Glassdoor),
-                   feeds.py (Greenhouse/Lever/Ashby), shared HTTP retry
+                   randstad.py (randstad.ca), feeds.py (Greenhouse/Lever/Ashby), shared HTTP retry
   normalize.py     one job shape, work-model detection, phrase matching
   dedupe.py        fingerprints
   filters.py       hard filters
