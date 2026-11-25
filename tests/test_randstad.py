@@ -93,6 +93,14 @@ def test_fetch_pages_filters_and_job_pages(conn, s):
     assert len(site.calls) == 2 + 33  # 2 search pages + job pages for the 33 Waterloo jobs
 
 
+def test_malformed_job_is_skipped_not_the_page(conn, s):
+    bad = src(1); del bad["JobId"]
+    pay = src(2, salary={"SalaryMin": "competitive", "SalaryMax": "", "CompensationType": "per year"})
+    site = lambda url, **kw: Resp(page("searchResults", [bad, pay, src(3)], 3)) if "/q-" in url else Resp(page("jobData", [src(3)], 1))
+    jobs = randstad.fetch(conn, s, get=site, sleep=lambda x: None, now=NOW)
+    assert [j["source_job_id"] for j in jobs] == ["rs-REF3"]
+
+
 def test_known_jobs_skipped(conn, s):
     pipeline.process(conn, s, randstad.fetch(conn, s, get=FakeSite(), sleep=lambda x: None, now=NOW), run_id=None)
     site = FakeSite()

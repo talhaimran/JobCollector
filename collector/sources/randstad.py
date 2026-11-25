@@ -84,7 +84,11 @@ def fetch(conn, s, get=None, sleep=time.sleep, now=None) -> list[dict]:
             url = f"{BASE}/jobs/q-{slug(title)}/" + (f"page-{page + 1}/" if page else "")
             raw, total = parse_search(client.get(url).text)
             for src in raw:
-                j = to_job(src)
+                try:
+                    j = to_job(src)
+                except (KeyError, ValueError, TypeError) as e:  # one malformed posting mustn't lose the rest
+                    log.warning("randstad: skipped a malformed job (%s: %s)", type(e).__name__, e)
+                    continue
                 if (j["posted_at"] and j["posted_at"] < since) or j["source_job_id"] in known \
                         or db.seen(conn, j["source"], j["source_job_id"], j["url"]):
                     continue

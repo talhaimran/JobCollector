@@ -28,8 +28,9 @@ def js_string(raw: str) -> str:
         e = m.group(1)
         if len(e) > 1:
             return chr(int(e[1:], 16))
-        return {"n": "\n", "r": "\r", "t": "\t"}.get(e, e)
-    return _ESC.sub(one, raw)
+        return {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f"}.get(e, e)
+    # \uD83D\uDE00 (emoji) decode to two halves: join them; a stray half becomes U+FFFD so SQLite can store it
+    return _ESC.sub(one, raw).encode("utf-16", "surrogatepass").decode("utf-16", "replace")
 
 
 def parse_page(html: str) -> tuple[list[dict], int]:
@@ -72,7 +73,11 @@ def fetch(conn, s, get=None, sleep=time.sleep, now=None) -> list[dict]:
             raw, total = parse_page(client.get(BASE + slug(title) + (f"?pagenumber={page + 1}" if page else "")).text)
             old = False
             for r in raw:
-                j = to_job(r)
+                try:
+                    j = to_job(r)
+                except (KeyError, ValueError, TypeError) as e:  # one malformed posting mustn't lose the rest
+                    log.warning("roberthalf: skipped a malformed job (%s: %s)", type(e).__name__, e)
+                    continue
                 if j["posted_at"] and j["posted_at"] < since:
                     old = True  # newest first: the rest of the pages are older still
                     continue  # an undated job is kept and proves nothing about the rest

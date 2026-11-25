@@ -23,9 +23,13 @@ def job(n, posted="2026-11-25", **kw):
 
 
 def page(jobs, found):
-    """Like the real page: JSON inside a single-quoted JS string, with \\x22 and \\u002D escapes."""
-    text = json.dumps({"data": {"found": str(found), "jobs": jobs}})
+    """Like the real page: JSON inside a single-quoted JS string, with \\x22 and \\u002D escapes,
+    and non-ASCII as JS \\uXXXX UTF-16 units (an emoji is two of them)."""
+    text = json.dumps({"data": {"found": str(found), "jobs": jobs}}, ensure_ascii=False)
     text = text.replace("\\", "\\\\").replace('"', "\\x22").replace("-", "\\u002D").replace("/", "\\/").replace("'", "\\'")
+    units = lambda c: c.encode("utf-16-be")
+    text = "".join(c if ord(c) < 128 else "".join(f"\\u{units(c)[i:i + 2].hex()}" for i in range(0, len(units(c)), 2))
+                   for c in text)
     return f"<script>aemSettings.rh_job_search.initialResults = JSON.parse('{text}');</script>"
 
 
@@ -76,6 +80,28 @@ def test_js_string_round_trip():
     raw = [job(1, description="Caf\u00e9 \u2019x\u2019 \\ back'slash \"quoted\" a/b \u002D-")]
     got, found = roberthalf.parse_page(page(raw, 1))
     assert got == raw and found == 1
+
+
+def test_emoji_survives_decoding_and_sqlite(conn, s):
+    html = page([job(1, description="<p>Great team \U0001F600 caf\u00e9</p>")], 1)
+    assert "\\ud83d\\ude00" in html  # the page carries the emoji as a surrogate pair, like the real one
+    raw, _ = roberthalf.parse_page(html)
+    j = roberthalf.to_job(raw[0])
+    assert j["description"] == "Great team \U0001F600 caf\u00e9"
+    pipeline.process(conn, s, [j], run_id=None)  # used to raise UnicodeEncodeError on lone surrogates
+    assert conn.execute("SELECT description FROM jobs").fetchone()[0] == "Great team \U0001F600 caf\u00e9"
+
+
+def test_js_string_escapes():
+    assert roberthalf.js_string(r"a\bb\fc\nd\x41\u0042\\\'") == "a\bb\fc\nd" + "AB\\'"
+    assert roberthalf.js_string(r"x\ud83dy") == "x\ufffdy"  # a stray half can't be stored: replaced
+
+
+def test_malformed_job_is_skipped_not_the_page(conn, s):
+    bad_id = job(1); del bad_id["unique_job_number"]
+    site = lambda url, **kw: Resp(page([bad_id, job(2, payrate_min="N/A"), job(3)], 3))
+    jobs = roberthalf.fetch(conn, s, get=site, sleep=lambda x: None, now=NOW)
+    assert [j["source_job_id"] for j in jobs] == ["rh-003-caen"]
 
 
 def test_fetch_pages_until_old_jobs(conn, s):
