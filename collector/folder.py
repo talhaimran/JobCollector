@@ -1,6 +1,7 @@
 """The data folder (JOB_FOLDER): the profile, data/jobs.db and logs/ live together so one folder can be
 backed up, synced or moved. .env (with the Gmail app password) stays in the app folder."""
 import logging
+from contextlib import closing
 import os
 import shutil
 import sqlite3
@@ -16,7 +17,7 @@ ON_WINDOWS = os.name == "nt"
 def _copy_db(src, dst):
     """A consistent copy even if the source is open (sqlite's backup API, not a file copy)."""
     dst.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(src) as a, sqlite3.connect(dst) as b:
+    with closing(sqlite3.connect(src)) as a, closing(sqlite3.connect(dst)) as b:
         a.backup(b)
 
 
@@ -38,6 +39,16 @@ def migrate_legacy() -> str | None:
     return msg
 
 
+# Everything Job Collector writes in a data folder. A symlink here could send a copy or a new database
+# to some other place, so a folder holding one is refused (a dangling one counts too: .exists() misses it).
+OWN_NAMES = ("candidate-profile.md", "data", "data/jobs.db", "data/jobs.db-journal", "data/jobs.db-wal",
+             "data/collector.lock", "logs", "logs/collector.log")
+
+
+def _symlink_in(p: Path) -> str | None:
+    return next((n for n in OWN_NAMES if (p / n).is_symlink()), None)
+
+
 def has_data(path) -> bool:
     return (path / "candidate-profile.md").exists() or (path / "data" / "jobs.db").exists()
 
@@ -56,6 +67,9 @@ def describe(path: str) -> dict:
         problem = f"The folder it would go in ({p.parent}) doesn't exist."
     elif not os.access(p if p.exists() else p.parent, os.W_OK):
         problem = "Job Collector can't write to that folder. Choose one in your own Documents."
+    elif p.is_symlink() or (p.is_dir() and _symlink_in(p)):
+        problem = (f"That folder has a shortcut (symlink) in it ({_symlink_in(p) if p.is_dir() else p.name}). "
+                   "Choose a folder without one.")
     return {"path": str(p), "has_data": problem is None and p.is_dir() and has_data(p), "problem": problem}
 
 
@@ -65,29 +79,35 @@ def switch(path: str, mode: str) -> str:
     from . import webui  # webui imports this module
     if mode not in ("use", "copy", "fresh"):
         raise ValueError(f"unknown mode: {mode}")
-    d = describe(path)
-    if d["problem"]:
-        raise ValueError(d["problem"])
-    target, old = Path(d["path"]), config.JOB_FOLDER
+
+    def check():
+        d = describe(path)
+        if d["problem"]:
+            raise ValueError(d["problem"])
+        if d["has_data"] and mode != "use":
+            raise ValueError("That folder already has Job Collector data. Choose 'Use the data already there'.")
+        return Path(d["path"])
+
+    target, old = check(), config.JOB_FOLDER
     if target.resolve() == old.resolve():
         return f"Already using {target}."
-    if d["has_data"] and mode != "use":
-        raise ValueError("That folder already has Job Collector data. Choose 'Use the data already there'.")
+    # Held until the new folder is saved and in use: a scheduled run starting meanwhile skips its turn
     with db.run_lock(config.LOCK_PATH) as got:
         if not got:
             raise ValueError("A check is running; try again in a minute.")
+        check()  # again, right before writing: the folder may have changed since the page asked
         target.mkdir(exist_ok=True)
         if mode == "copy":
             if config.PROFILE_PATH.exists():
                 shutil.copy2(config.PROFILE_PATH, target / "candidate-profile.md")
             if config.DB_PATH.exists():
                 _copy_db(config.DB_PATH, target / "data" / "jobs.db")
-    # single-quoted for dotenv: a '#' would otherwise start a comment, and double quotes expand \n in C:\new
-    quoted = "'" + str(target).replace("\\", "\\\\").replace("'", "\\'") + "'"
-    webui.update_env(webui.ENV_PATH, {"JOB_FOLDER": quoted})  # scheduled runs read it from .env
-    if config.LEGACY_DB.exists() and target / "data" / "jobs.db" != config.LEGACY_DB:
-        _moved_marker().write_text(f"Data folder switched to {target}.\n")  # never seed it with old jobs
-    config.use_folder(target)
+        # single-quoted for dotenv: a '#' would otherwise start a comment, and double quotes expand \n in C:\new
+        quoted = "'" + str(target).replace("\\", "\\\\").replace("'", "\\'") + "'"
+        webui.update_env(webui.ENV_PATH, {"JOB_FOLDER": quoted})  # scheduled runs read it from .env
+        if config.LEGACY_DB.exists() and target / "data" / "jobs.db" != config.LEGACY_DB:
+            _moved_marker().write_text(f"Data folder switched to {target}.\n")  # never seed it with old jobs
+        config.use_folder(target)
     log.info("data folder: %s -> %s (%s)", old, target, mode)
     return {"use": f"Now using {target} and the data already there.",
             "copy": f"Now using {target}. Your data was copied there; {old} was left as it was.",
