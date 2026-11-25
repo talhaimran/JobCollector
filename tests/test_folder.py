@@ -48,3 +48,80 @@ def test_run_logs_into_the_data_folder(tmp_path, monkeypatch, caplog):
                 logging.getLogger().removeHandler(h)
                 h.close()
     assert "hello from a run" in (tmp_path / "logs" / "collector.log").read_text()
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch):
+    """Current data folder with a profile and one saved value; .env in a temp app folder."""
+    from collector import folder, webui
+    env = tmp_path / "app" / ".env"
+    env.parent.mkdir()
+    monkeypatch.setattr(webui, "ENV_PATH", env)
+    current = tmp_path / "current"
+    config.use_folder(current)
+    current.mkdir()
+    config.PROFILE_PATH.write_text("## Job Search Settings\n- Target titles: Project Manager\n")
+    conn = db.connect(config.DB_PATH)
+    db.kv_set(conn, "marker", "mine")
+    conn.commit()
+    conn.close()
+    return folder, env
+
+
+def test_copy_into_folder_with_spaces(app, tmp_path):
+    folder, env = app
+    target = tmp_path / "Job Collector – é"
+    msg = folder.switch(str(target), "copy")
+    assert config.JOB_FOLDER == target and str(target) in msg
+    assert "Project Manager" in (target / "candidate-profile.md").read_text()
+    assert db.kv_get(db.connect(target / "data" / "jobs.db"), "marker") == "mine"
+    assert f"JOB_FOLDER={target}" in env.read_text()
+    assert (tmp_path / "current" / "data" / "jobs.db").exists()  # nothing deleted
+
+
+def test_existing_data_never_overwritten(app, tmp_path):
+    folder, _ = app
+    other = tmp_path / "synced"
+    (other / "data").mkdir(parents=True)
+    (other / "candidate-profile.md").write_text("theirs")
+    assert folder.describe(str(other))["has_data"] is True
+    for mode in ("copy", "fresh"):
+        with pytest.raises(ValueError, match="already has Job Collector data"):
+            folder.switch(str(other), mode)
+    folder.switch(str(other), "use")
+    assert (other / "candidate-profile.md").read_text() == "theirs"
+
+
+def test_switch_refused_while_locked(app, tmp_path):
+    folder, _ = app
+    with db.run_lock(config.LOCK_PATH) as got:
+        assert got
+        with pytest.raises(ValueError, match="A check is running"):
+            folder.switch(str(tmp_path / "new"), "copy")
+    assert config.JOB_FOLDER == tmp_path / "current"
+
+
+def test_fresh_leaves_old_data(app, tmp_path):
+    folder, _ = app
+    folder.switch(str(tmp_path / "empty"), "fresh")
+    assert not config.PROFILE_PATH.exists() and not config.DB_PATH.exists()
+    assert (tmp_path / "current" / "candidate-profile.md").exists()
+
+
+def test_describe_problems(app, tmp_path):
+    folder, _ = app
+    assert folder.describe("relative/path")["problem"]
+    assert folder.describe(str(tmp_path / "no" / "such" / "parent"))["problem"]
+    ok = folder.describe(str(tmp_path / "new"))
+    assert ok == {"path": str(tmp_path / "new"), "has_data": False, "problem": None}
+    with pytest.raises(ValueError):
+        folder.switch("relative/path", "fresh")
+
+
+def test_choose_native_cancel_returns_none(monkeypatch):
+    import subprocess
+    from collector import folder
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, stdout="", stderr="User canceled."))
+    assert folder.choose_native() is None
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="/Users/x/Job Collector/\n", stderr=""))
+    assert folder.choose_native() == "/Users/x/Job Collector"
