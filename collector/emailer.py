@@ -73,10 +73,14 @@ def build(jobs: list[dict], stats: dict, filters_off: list, errors: dict, now: d
     return subject, body, "\n".join(text)
 
 
+class NotConfigured(RuntimeError):
+    """Email was skipped during setup: not an error, the jobs wait on the page."""
+
+
 def send(subject: str, html_body: str, text_body: str):
     missing = [k for k in ("EMAIL_FROM", "EMAIL_TO", "SMTP_USER", "SMTP_APP_PASSWORD") if not getattr(config, k)]
     if missing:
-        raise RuntimeError(f"Email not sent: set {', '.join(missing)} in .env")
+        raise NotConfigured(f"Email not sent: set {', '.join(missing)} in .env")
     msg = EmailMessage()
     msg["Subject"], msg["From"], msg["To"] = subject, config.EMAIL_FROM, config.EMAIL_TO
     msg.set_content(text_body)

@@ -26,7 +26,7 @@
   - [Robert Half Canada](#robert-half-canada)
   - [Pipeline](#pipeline)
   - [How the pre-score works](#how-the-pre-score-works)
-- [Audit and settings page](#audit-and-settings-page)
+- [Jobs found and settings page](#jobs-found-and-settings-page)
 - [Scheduling (macOS or Windows)](#scheduling-macos-or-windows)
 - [Checking the filters](#checking-the-filters)
 - [Project layout](#project-layout)
@@ -77,7 +77,14 @@ No terminal needed.
    - **Windows:** `Launch JobCollector Windows.bat`. If SmartScreen appears, click **More info → Run anyway**.
 
    It checks for Python 3.10 or newer (and opens the download page if it's missing), installs what it needs the first time (a few minutes, needs internet: the packages in `requirements.txt` come from [PyPI](https://pypi.org) through pip), then opens the settings page in your browser. Keep the small window open while you use the page; scheduled checks keep running after you close it.
-3. **Fill in the settings page:** the jobs you want (Search and Filters), your Gmail details (Email, with a Gmail [app password](https://myaccount.google.com/apppasswords), not your normal password) and how often to check (Schedule), then **Save settings**. Saving sets up the schedule on this computer.
+3. **Follow the five setup screens** that open the first time:
+   1. where your job data lives (a folder in Documents is suggested);
+   2. the job titles you want, where, and remote / hybrid / on-site;
+   3. your Gmail details, with a Gmail [app password](https://myaccount.google.com/apppasswords) (not your normal password) and a *Send test email* button. You can skip email, but then Job Collector won't send you any updates: new jobs only show on the page;
+   4. how often to check (every 2 hours by default). This sets up the schedule on your computer;
+   5. **Find jobs now** runs the first check while you watch.
+
+   Everything can be changed later under **Settings** (and **Run setup again** is there too).
 
 To open the page again later, double-click the launcher again.
 
@@ -248,11 +255,11 @@ Keywords match case-insensitively as whole words or phrases in the title and des
 
 Note that Glassdoor returns no descriptions (JobSpy 1.4.1), so Glassdoor jobs score on title only and dealbreakers are checked against the title alone.
 
-## Audit and settings page
+## Jobs found and settings page
 
 `.venv/bin/python -m collector ui` serves a page on `http://127.0.0.1:8765`. It listens only on your own computer and rejects requests from other sites. Stop it with Ctrl+C.
 
-- **Audit**: every saved job, filtered by date found or date posted (Today, Since yesterday, 7 days, 30 days, All, or a custom range). Click a rejection reason to list those jobs, and click *description* to read the text the keyword and dealbreaker checks saw. *Recent runs* lists per-source counts and errors.
+- **Jobs found**: every saved job, filtered by date found or date posted (Today, Since yesterday, 7 days, 30 days, All, or a custom range). Click a rejection reason to list those jobs, and click *description* to read the text the keyword and dealbreaker checks saw. *Recent runs* lists per-source counts and errors.
 ![JobCollector settings page with a live preview of which jobs would be emailed](docs/settings.png)
 
 - **Settings**: the job search settings (titles, locations, work model, salary floor, keywords, excluded companies), pre-score weights, email cutoff, Gmail addresses and app password, and *Send test email*. The app password is never sent back to the page: leave the field blank to keep the saved one. The preview re-runs the filters and scores on saved jobs with your unsaved values.
@@ -267,6 +274,19 @@ On the *This computer* tab, **Choose folder…** opens your computer's own folde
 - otherwise → **Copy my data there** or **Start fresh there**.
 
 Nothing is ever deleted: the old folder stays as it was. Switching is refused while a check is running. Scheduled runs pick up the new folder on their next start. Before this version the database lived in `<app folder>/data`; the first run after upgrading copies it into the data folder and leaves the original.
+
+The page uses plain names for the profile's settings:
+
+| On the page | In `candidate-profile.md` |
+|---|---|
+| Job titles to look for | Target titles |
+| Skip titles containing | Exclude titles |
+| Remote jobs allowed in | Remote in |
+| Skip jobs that mention | Dealbreaker keywords |
+| Skip these companies | Excluded companies |
+| Keywords that raise the match score | Must-have keywords |
+| Lowest match score to email | Email cutoff |
+| Match score (tab) | the pre-score |
 
 No profile yet? Fill in *Job search* and save: the page creates `candidate-profile.md` with just a `## Job Search Settings` section. If the profile has no such section, one is added at the end. Target companies and base resume are still edited in the file.
 

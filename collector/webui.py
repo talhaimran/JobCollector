@@ -4,8 +4,11 @@ import json
 import logging
 import os
 import re
+import smtplib
 import subprocess
+import sys
 import tempfile
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -70,6 +73,7 @@ def read_config() -> dict:
     out["SEND_WHEN_EMPTY"] = (env.get("SEND_WHEN_EMPTY") or "false").lower() == "true"
     out["SEND_PARTIAL_SCORES"] = (env.get("SEND_PARTIAL_SCORES") or "false").lower() == "true"
     out["SCHEDULE_PLATFORM"] = env.get("SCHEDULE_PLATFORM") or config.SCHEDULE_PLATFORM
+    out["this_platform"] = schedule.this_platform()  # .env may have come from another computer
     out["SCHEDULE_HOURS"] = float(env.get("SCHEDULE_HOURS") or 2)
     for k, d in config.SCORE_DEFAULTS.items():
         out[k] = float(env[k]) if env.get(k) else d
@@ -79,6 +83,7 @@ def read_config() -> dict:
     out["profile"]["search_radius"] = s.search_radius
     out["default_radius"] = settings.DEFAULT_RADIUS_MILES
     out["job_folder"] = str(config.JOB_FOLDER)
+    out["suggested_folder"] = str(Path.home() / "Documents" / "Job Collector")
     out["profile_path"] = str(config.PROFILE_PATH)
     out["profile_exists"] = config.PROFILE_PATH.exists()
     return out
@@ -172,11 +177,15 @@ def apply_schedule(env: dict) -> str | None:
 
 
 def save_config(body: dict) -> str | None:
-    env, cutoff = validate(body)
-    prof = validate_profile(body)
+    """Saves what the page sent on top of what's saved, so a setup step can send just its own fields.
+    The schedule is (re)applied only when the page sends SCHEDULE_HOURS."""
+    cur = read_config()
+    merged = {**cur, **body, "profile": {**cur["profile"], **(body.get("profile") or {})}}
+    env, cutoff = validate(merged)
+    prof = validate_profile(merged)
     update_env(ENV_PATH, env)
     _atomic_write(config.PROFILE_PATH, apply_profile(profile_text(), prof, cutoff))
-    return apply_schedule(env)
+    return apply_schedule(env) if "SCHEDULE_HOURS" in body else None
 
 
 # --- queries ------------------------------------------------------------------
@@ -218,7 +227,93 @@ def send_test_email():
     for k in EMAIL_KEYS + ["SMTP_APP_PASSWORD"]:
         setattr(config, k, env.get(k) or "")
     text = "This is a test from the job collector's settings page. If you can read it, email works."
-    emailer.send("[Jobs] Test email", f"<p>{text}</p>", text)
+    try:
+        emailer.send("[Jobs] Test email", f"<p>{text}</p>", text)
+    except smtplib.SMTPAuthenticationError:
+        raise ValueError("Gmail didn't accept that password. Use an app password (16 letters from Google), "
+                         "not your normal Gmail password.") from None
+    except emailer.NotConfigured:
+        raise ValueError("Fill in the email addresses and the app password first, then save.") from None
+
+
+# --- run now ------------------------------------------------------------------
+class Busy(Exception):
+    pass
+
+
+ON_WINDOWS = os.name == "nt"
+RUN = {"proc": None, "offset": 0, "watching": False, "after_id": 0}  # the check this page started or joined; where its log lines begin
+_LOG_LINE = re.compile(r"^\S+ \S+ \w+ [\w.]+: ")  # "2026-11-25 10:00:01,000 INFO collector.x: "
+
+
+def _log_path():
+    return config.LOGS_DIR / "collector.log"
+
+
+def _lock_held() -> bool:
+    # shortcut: probing takes the lock for an instant; a scheduled run starting in that instant skips one turn
+    with db.run_lock(config.LOCK_PATH) as got:
+        return not got
+
+
+_STARTING = threading.Lock()  # the server is threaded: two clicks at once must start one check
+
+
+def start_run() -> bool:
+    """Starts a check, or follows the one already running (e.g. saving the schedule just started one).
+    Returns True if this started it."""
+    with _STARTING:
+        return _start_run()
+
+
+def _start_run() -> bool:
+    if RUN["proc"] is not None and RUN["proc"].poll() is None:
+        raise Busy("A check is already running.")
+    RUN["offset"] = _log_path().stat().st_size if _log_path().exists() else 0
+    RUN["watching"] = True
+    last = db.last_runs(db.connect(config.DB_PATH), 1)
+    RUN["after_id"] = last[0]["id"] if last else 0  # only a run newer than this is "the" result
+    if _lock_held():
+        RUN["proc"] = None
+        if last and not last[0]["finished_at"]:  # the check we join already wrote its run row
+            RUN["after_id"] -= 1
+        return False
+    # the child must see the settings saved since this page started (load_dotenv never overrides os.environ)
+    env = {**os.environ, **{k: v for k, v in dotenv_values(ENV_PATH).items() if v is not None},
+           "JOB_FOLDER": str(config.JOB_FOLDER)}
+    _log_path().parent.mkdir(parents=True, exist_ok=True)
+    with _log_path().open("a", encoding="utf-8") as err:  # a crash before logging starts still leaves a trace
+        RUN["proc"] = subprocess.Popen(
+            [sys.executable, "-m", "collector", "run"], cwd=config.ROOT, env=env,
+            stdout=subprocess.DEVNULL, stderr=err,
+            # closing the launcher window mustn't kill the check: on Windows no console at all (DETACHED_PROCESS
+            # 0x8; a new group 0x200 alone still gets CTRL_CLOSE), elsewhere its own session
+            **({"creationflags": 0x8 | 0x200} if ON_WINDOWS else {"start_new_session": True}))
+    return True
+
+
+def run_status(conn) -> dict:
+    code = RUN["proc"].poll() if RUN["proc"] is not None else None
+    if code not in (None, 0, 75):  # crashed (75: lost the lock to a check starting then, which we follow)
+        RUN["after_id"] = None  # so no later run is passed off as its result
+    if RUN["proc"] is not None and code != 75:
+        running = code is None  # our own check: done when it exits, whoever takes the lock next
+    else:
+        running = RUN["watching"] and _lock_held()  # a check we joined
+    lines = []
+    if RUN["watching"] and _log_path().exists():
+        with _log_path().open("rb") as f:
+            f.seek(RUN["offset"])
+            text = f.read().decode("utf-8", "replace")
+        # one line per log entry, for people: skip multi-line blocks (the settings summary), their "...:" headers
+        # and raw data dumps like "Run 1 done: {...}"
+        lines = [m for m in (_LOG_LINE.sub("", l) for l in text.splitlines() if _LOG_LINE.match(l))
+                 if not m.endswith(":") and "{'" not in m]
+    # the first run after the click is ours (or the one we joined); a later scheduled one never is
+    row = None if RUN["after_id"] is None else conn.execute(
+        "SELECT * FROM runs WHERE id > ? ORDER BY id LIMIT 1", (RUN["after_id"],)).fetchone()
+    mine = row is not None and row["finished_at"]
+    return {"running": running, "lines": lines[-8:], "run": dict(row) if mine and not running else None}
 
 
 # --- HTTP ---------------------------------------------------------------------
@@ -269,6 +364,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, [dict(r) for r in db.last_runs(conn, 1000)])
             if u.path == "/api/config":
                 return self._send(200, read_config())
+            if u.path == "/api/run":
+                return self._send(200, run_status(conn))
             if u.path == "/api/folder":
                 return self._send(200, folder.describe(q.get("path", "")))
             return self._send(404, {"error": "not found"})
@@ -287,6 +384,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/config":
                 msg = save_config(body)
                 return self._send(200, {**read_config(), "schedule_message": msg})
+            if u.path == "/api/run":
+                return self._send(200, {"started": start_run()})
             if u.path == "/api/folder/choose":
                 return self._send(200, {"path": folder.choose_native()})
             if u.path == "/api/folder":
@@ -298,6 +397,8 @@ class Handler(BaseHTTPRequestHandler):
                 send_test_email()
                 return self._send(200, {"ok": True})
             return self._send(404, {"error": "not found"})
+        except Busy as e:
+            return self._send(409, {"error": str(e)})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
         except Exception as e:

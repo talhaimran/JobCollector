@@ -144,6 +144,8 @@ def run(dry_run=False, s=None, conn=None, fetch_jobspy=jobspy_src.fetch, fetch_f
                 send(subject, html_body, text_body)
                 emailed = len(to_email)
                 db.mark_emailed(conn, [r["id"] for r in to_email], now_iso())
+            except emailer.NotConfigured:
+                log.info("Email not set up: %d matches are on the Jobs found page", len(to_email))
             except Exception as e:
                 log.error("Email failed: %s", e)
                 errors["email"] = [f"{type(e).__name__}: {e}"]

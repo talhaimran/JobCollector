@@ -199,6 +199,137 @@ def test_folder_endpoints(server, tmp_path, monkeypatch):
         config.use_folder(config.JOB_FOLDER_DEFAULT)
 
 
+def test_partial_save_keeps_other_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROFILE_PATH", tmp_path / "candidate-profile.md")
+    monkeypatch.setattr(webui, "ENV_PATH", tmp_path / ".env")
+    applied = []
+    monkeypatch.setattr(webui, "apply_schedule", lambda env: applied.append(env))
+    webui.save_config({**GOOD, "SCHEDULE_HOURS": 2, "profile": PROFILE_BODY})
+    assert len(applied) == 1
+    webui.save_config({"profile": {"target_titles": "Scrum Master"}})  # one wizard step
+    cfg = webui.read_config()
+    assert cfg["profile"]["target_titles"] == "Scrum Master"
+    assert cfg["profile"]["salary_floor"] == 85000 and cfg["profile"]["dealbreakers"] == "French required"
+    assert cfg["EMAIL_FROM"] == "a@b.co" and cfg["email_cutoff"] == 55 and cfg["has_password"]
+    assert len(applied) == 1  # the schedule is applied only when the page sends it
+
+
+def test_test_email_auth_error_is_plain(monkeypatch, tmp_path):
+    import smtplib
+    monkeypatch.setattr(webui, "ENV_PATH", tmp_path / ".env")
+    def refuse(*a):
+        raise smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+    monkeypatch.setattr(webui.emailer, "send", refuse)
+    with pytest.raises(ValueError, match="app password"):
+        webui.send_test_email()
+
+
+def test_run_now_starts_once_and_streams_new_log_lines(server, tmp_path, monkeypatch):
+    import subprocess
+    config.use_folder(tmp_path / "data folder")
+    try:
+        log = config.LOGS_DIR / "collector.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("2026-11-25 09:00:00,000 INFO collector.pipeline: an older run\n")
+
+        class Proc:
+            code = None
+            def poll(self):
+                return self.code
+        started = []
+        def popen(cmd, **kw):
+            started.append(cmd)
+            return Proc()
+        monkeypatch.setattr(subprocess, "Popen", popen)
+
+        assert call(server + "/api/run", {})[0] == 200
+        assert started and started[0][-3:] == ["-m", "collector", "run"]
+        assert call(server + "/api/run", {}) == (409, {"error": "A check is already running."})
+
+        with log.open("a") as f:
+            f.write("2026-11-25 10:00:00,500 INFO collector.pipeline: Settings:\n  target titles  Project Manager\n")
+            f.write("2026-11-25 10:00:01,000 INFO collector.sources.randstad: randstad: 4 requests, 2 new jobs\n")
+            f.write("2026-11-25 10:00:02,000 INFO collector.pipeline: Run 1 done: {'run_id': 1, 'found': 13}\n")
+        code, st = call(server + "/api/run")
+        assert code == 200 and st["running"] is True
+        assert st["lines"] == ["randstad: 4 requests, 2 new jobs"]  # not the older run, no timestamps
+
+        webui.RUN["proc"].code = 0
+        assert call(server + "/api/run")[1]["running"] is False
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_page_uses_plain_labels():
+    page = webui.PAGE.read_text()
+    for label in ("Jobs found", "Match score", "Job titles to look for", "Skip titles containing",
+                  "Remote jobs allowed in", "Skip jobs that mention", "Skip these companies",
+                  "Keywords that raise the match score", "Lowest match score to email", "Gmail address used to send"):
+        assert label in page, label
+    for old in ("Dealbreaker keywords", "Filter audit", ">Audit<", "Email cutoff</label>", "Must-have keywords</label>"):
+        assert old not in page, old
+
+
+def test_config_suggests_documents_folder():
+    from pathlib import Path
+    assert webui.read_config()["suggested_folder"] == str(Path.home() / "Documents" / "Job Collector")
+
+
+def test_run_now_joins_a_check_already_running(server, tmp_path):
+    config.use_folder(tmp_path / "f")
+    try:
+        log = config.LOGS_DIR / "collector.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("2026-11-25 09:00:00,000 INFO collector.pipeline: before\n")
+        with db.run_lock(config.LOCK_PATH) as got:  # e.g. the schedule just started one
+            assert got
+            assert call(server + "/api/run", {}) == (200, {"started": False})
+            with log.open("a") as f:
+                f.write("2026-11-25 09:00:05,000 INFO collector.sources.linkedin: linkedin: 3 new jobs\n")
+            st = call(server + "/api/run")[1]
+            assert st["running"] is True and st["lines"] == ["linkedin: 3 new jobs"]
+        assert call(server + "/api/run")[1]["running"] is False
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_setup_wizard_markup():
+    page = webui.PAGE.read_text()
+    assert 'id="view-setup"' in page and page.count('<section class="group" data-step="') == 5
+    assert ("Skip email? Job Collector won't send you any updates. "
+            "You'll only see new jobs when you open this page.") in page
+    assert "Run setup again" in page
+
+
+def test_run_now_child_gets_current_settings_and_only_its_own_run(server, tmp_path, monkeypatch):
+    import subprocess
+    config.use_folder(tmp_path / "now here")
+    try:
+        (tmp_path / ".env").write_text("EMAIL_TO=new@x.co\nJOB_FOLDER=/stale\n")
+        monkeypatch.setenv("EMAIL_TO", "old@x.co")  # what the UI process loaded at startup
+        conn = db.connect(config.DB_PATH)
+        db.start_run(conn, "2026-11-01T00:00:00+00:00", "[]")  # an earlier run
+        conn.commit()
+        seen = {}
+        class Proc:
+            def poll(self):
+                return 1  # crashed before writing a run row
+        def popen(cmd, **kw):
+            seen.update(kw)
+            return Proc()
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        assert call(server + "/api/run", {}) == (200, {"started": True})
+        assert seen["env"]["EMAIL_TO"] == "new@x.co" and seen["env"]["JOB_FOLDER"] == str(config.JOB_FOLDER)
+        assert seen.get("start_new_session") or seen.get("creationflags")  # survives closing the launcher window
+        st = call(server + "/api/run")[1]
+        assert st["running"] is False and st["run"] is None  # the old run isn't passed off as this one
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
 def test_serve_when_another_program_has_port_says_so_and_opens_nothing(monkeypatch, capsys):
     import webbrowser
     from http.server import BaseHTTPRequestHandler
@@ -222,3 +353,165 @@ def test_serve_when_another_program_has_port_says_so_and_opens_nothing(monkeypat
     assert e.value.code == 1
     assert opened == []
     assert f"Port {port} is used by another program" in capsys.readouterr().out
+
+
+def test_run_now_joining_a_check_that_already_has_its_run_row_reports_that_run(server, tmp_path):
+    config.use_folder(tmp_path / "f")
+    try:
+        conn = db.connect(config.DB_PATH)
+        db.start_run(conn, "2026-11-25T09:00:00+00:00", "[]")  # an older, finished run
+        conn.execute("UPDATE runs SET finished_at='2026-11-25T09:05:00+00:00'")
+        with db.run_lock(config.LOCK_PATH):
+            joined = db.start_run(conn, "2026-11-25T11:00:00+00:00", "[]")  # the scheduled check, mid-run
+            assert call(server + "/api/run", {}) == (200, {"started": False})
+            conn.execute("UPDATE runs SET finished_at='2026-11-25T11:04:00+00:00' WHERE id=?", (joined,))
+            conn.commit()
+        st = call(server + "/api/run")[1]
+        assert st["running"] is False and st["run"]["id"] == joined
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+@pytest.mark.parametrize("code, reported", [(1, False), (75, True)])
+def test_run_now_child_that_did_not_run_its_own_check(server, tmp_path, monkeypatch, code, reported):
+    """1: it crashed, so a later run isn't its result. 75: it lost the lock to a check starting at the
+    same moment, so the page follows that check, as when it joins one already running."""
+    import subprocess
+    config.use_folder(tmp_path / "f")
+    try:
+        conn = db.connect(config.DB_PATH)
+
+        class Proc:
+            def poll(self):
+                return code
+        monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: Proc())
+        assert call(server + "/api/run", {}) == (200, {"started": True})
+        other = db.start_run(conn, "2026-11-25T11:00:00+00:00", "[]")
+        conn.execute("UPDATE runs SET finished_at='2026-11-25T11:04:00+00:00' WHERE id=?", (other,))
+        conn.commit()
+        st = call(server + "/api/run")[1]
+        assert st["running"] is False
+        assert (st["run"] is not None and st["run"]["id"] == other) is reported
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_run_lost_to_another_check_exits_75(tmp_path, monkeypatch):
+    import argparse
+    from collector import cli
+    config.use_folder(tmp_path)
+    with db.run_lock(config.LOCK_PATH):
+        with pytest.raises(SystemExit) as e:
+            cli.cmd_run(argparse.Namespace(dry_run=True))
+    assert e.value.code == 75
+    config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_run_now_on_windows_is_detached_from_the_launcher_console(server, tmp_path, monkeypatch):
+    import subprocess
+    config.use_folder(tmp_path / "f")
+    try:
+        seen = {}
+
+        class Proc:
+            def poll(self):
+                return None
+        def popen(cmd, **kw):
+            seen.update(kw)
+            return Proc()
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        monkeypatch.setattr(webui, "ON_WINDOWS", True)
+        assert call(server + "/api/run", {})[0] == 200
+        # DETACHED_PROCESS (0x8): no console, so closing the launcher window doesn't send it CTRL_CLOSE
+        assert seen["creationflags"] & 0x8 and seen["creationflags"] & 0x200
+        assert seen["stdout"] == subprocess.DEVNULL and seen["stderr"] is not None
+        assert "start_new_session" not in seen
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_setup_schedules_for_this_computer_not_the_saved_platform(monkeypatch, tmp_path):
+    from collector import schedule
+    webui.ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    webui.ENV_PATH.write_text("SCHEDULE_PLATFORM=windows\n")  # .env came from another computer
+    monkeypatch.setattr(schedule, "this_platform", lambda: "mac")
+    cfg = webui.read_config()
+    assert cfg["SCHEDULE_PLATFORM"] == "windows" and cfg["this_platform"] == "mac"
+    assert "SCHEDULE_PLATFORM: CFG.this_platform" in webui.PAGE.read_text()  # the wizard's schedule step
+
+
+def _finished_run(conn, started):
+    rid = db.start_run(conn, started, "[]")
+    conn.execute("UPDATE runs SET finished_at=? WHERE id=?", (started, rid))
+    conn.commit()
+    return rid
+
+
+def test_run_now_reports_its_own_run_even_if_a_scheduled_one_starts_before_the_next_poll(server, tmp_path, monkeypatch):
+    import subprocess
+    config.use_folder(tmp_path / "f")
+    try:
+        conn = db.connect(config.DB_PATH)
+
+        class Proc:
+            code = None
+            def poll(self):
+                return self.code
+        monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: Proc())
+        assert call(server + "/api/run", {}) == (200, {"started": True})
+        mine = _finished_run(conn, "2026-11-25T11:00:00+00:00")
+        webui.RUN["proc"].code = 0
+        with db.run_lock(config.LOCK_PATH):  # the schedule starts right away
+            db.start_run(conn, "2026-11-25T11:03:00+00:00", "[]")
+            st = call(server + "/api/run")[1]
+        assert st["running"] is False and st["run"]["id"] == mine
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_run_now_clean_exit_without_a_finished_run_says_it_stopped(server, tmp_path, monkeypatch):
+    import subprocess
+    config.use_folder(tmp_path / "f")
+    try:
+        class Proc:
+            def poll(self):
+                return 0  # e.g. skipped because the data folder changed
+        monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: Proc())
+        call(server + "/api/run", {})
+        st = call(server + "/api/run")[1]
+        assert st["running"] is False and st["run"] is None  # the page says the check stopped
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_simultaneous_run_now_clicks_start_one_check(server, tmp_path, monkeypatch):
+    import subprocess
+    import threading
+    import time
+    config.use_folder(tmp_path / "f")
+    try:
+        started = []
+
+        class Proc:
+            def poll(self):
+                return None
+        def slow_popen(cmd, **kw):
+            time.sleep(0.2)  # widen the window between "is one running?" and "started"
+            started.append(cmd)
+            return Proc()
+        monkeypatch.setattr(subprocess, "Popen", slow_popen)
+        codes = []
+        ts = [threading.Thread(target=lambda: codes.append(call(server + "/api/run", {})[0])) for _ in range(2)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        assert len(started) == 1 and sorted(codes) == [200, 409]
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
