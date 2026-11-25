@@ -10,7 +10,7 @@
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#scheduling-macos-or-windows)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
 
-![JobCollector filter audit page: every collected job with the first filter it failed, grouped by rejection reason](docs/audit.png)
+![JobCollector Jobs found page: every collected job with the first filter it failed, grouped by rejection reason](docs/audit.png)
 
 ## Table of Contents
 
@@ -49,7 +49,9 @@ It never logs in to any site and uses no AI or paid API. It runs on your own Mac
 - **Hard filters:** target and excluded titles, accepted cities, "remote in" countries, work model, employment type, CAD salary floor, excluded companies and dealbreaker phrases. Every rejected job keeps its `filter_reason`.
 - **Keyword pre-score (0–100):** must-have keyword matches plus title match, with weights you tune from a live preview.
 - **Email digest:** HTML + text email over Gmail SMTP with only new, passing, non-duplicate jobs above your cutoff.
-- **Local web UI:** an audit page for every saved job and a settings page with a scoring preview, at `http://127.0.0.1:8765`.
+- **No-terminal setup:** double-click a launcher, then five setup screens in your browser (data folder, job, email, schedule, first check).
+- **Local web page:** *Jobs found* lists every saved job and why it was filtered out; *Settings* changes everything, with a live match-score preview. At `http://127.0.0.1:8765`, on your computer only.
+- **One data folder:** your settings, database and logs together, so you can back them up, sync them or move computers.
 - **Scheduler built in:** installs itself into macOS launchd or Windows Task Scheduler.
 - **Polite by design:** request budgets, random pauses and back-off, so it doesn't get your IP blocked.
 
@@ -62,7 +64,7 @@ Sites not used: ZipRecruiter and hiring.cafe block scripts outright, and Google 
 | Language | Python 3.13 (standard library `sqlite3`, `smtplib`, `http.server`) |
 | Job boards | [python-jobspy](https://pypi.org/project/python-jobspy/) 1.4.1 (Indeed, Glassdoor), `requests` + `beautifulsoup4` (LinkedIn, Randstad, Robert Half) |
 | Company feeds | Greenhouse, Lever and Ashby public JSON APIs |
-| Storage | SQLite (`data/jobs.db`) |
+| Storage | SQLite (`data/jobs.db` in your data folder) |
 | Config | `python-dotenv` (`.env`) + a Markdown profile (`candidate-profile.md`) |
 | Scheduling | macOS launchd, Windows Task Scheduler |
 | Tests / CI | pytest (no network, HTML/JSON fixtures), GitHub Actions |
@@ -76,7 +78,9 @@ No terminal needed.
    - **Mac:** `Launch JobCollector Mac.command`. The first time, macOS blocks files from the internet: right-click it → **Open** → **Open**.
    - **Windows:** `Launch JobCollector Windows.bat`. If SmartScreen appears, click **More info → Run anyway**.
 
-   It checks for Python 3.10 or newer (and opens the download page if it's missing), installs what it needs the first time (a few minutes, needs internet: the packages in `requirements.txt` come from [PyPI](https://pypi.org) through pip), then opens the settings page in your browser. Keep the small window open while you use the page; scheduled checks keep running after you close it.
+   It checks for Python 3.10 or newer (and opens the download page if it's missing), installs what it needs the first time (a few minutes, needs internet: the packages in `requirements.txt` come from [PyPI](https://pypi.org) through pip), then opens Job Collector in your browser. Keep the small window open while you use the page; scheduled checks keep running after you close it.
+
+   If the window says *Job Collector can't save files in this folder*, move the whole folder somewhere you own (such as Documents). If it says *Port 8765 is used by another program*, close that program and double-click again.
 3. **Follow the five setup screens** that open the first time:
    1. where your job data lives (a folder in Documents is suggested);
    2. the job titles you want, where, and remote / hybrid / on-site;
@@ -86,7 +90,7 @@ No terminal needed.
 
    Everything can be changed later under **Settings** (and **Run setup again** is there too).
 
-To open the page again later, double-click the launcher again.
+To open the page again later, double-click the launcher again; if the page is already open, it just opens it in your browser. Close the launcher window to stop the page.
 
 ### For developers
 
@@ -100,7 +104,7 @@ cp .env.example .env
 
 On Windows use `py -m venv .venv`, `.venv\Scripts\pip` and `.venv\Scripts\python`, and `copy` instead of `cp`. Put your Gmail details in `.env` (see [Configuration](#configuration)).
 
-Describe the jobs you want on the settings page (`.venv/bin/python -m collector ui`), or in `candidate-profile.md`:
+Start the page with `.venv/bin/python -m collector ui`: the first time it opens the same setup screens. Or describe the jobs you want in `candidate-profile.md` (in your data folder; the project folder by default):
 
 ```markdown
 ## Job Search Settings
@@ -136,7 +140,7 @@ Try it, then schedule it:
 .venv/bin/python -m collector run --dry-run   # everything except sending; prints the email
 .venv/bin/python -m collector run             # real run
 .venv/bin/python -m collector report          # last 10 runs + which source is fastest
-.venv/bin/python -m collector ui              # audit + settings page at http://127.0.0.1:8765
+.venv/bin/python -m collector ui              # Jobs found + Settings page at http://127.0.0.1:8765
 .venv/bin/pytest -q                           # tests (no network)
 ```
 
@@ -158,7 +162,7 @@ A run searches each location and "Remote in" country once per search title. Targ
 | `SEND_PARTIAL_SCORES` | `false` | `true` to also email passing jobs that have no description, tagged *partial score* |
 | `LINKEDIN_MIN_HOURS` | `4` | at most one LinkedIn sweep per this many hours |
 | `LINKEDIN_REQUEST_BUDGET` | `40` | at most this many LinkedIn requests per sweep |
-| `SCHEDULE_PLATFORM` | `mac` | `mac` or `windows`; also on the settings page |
+| `SCHEDULE_PLATFORM` | `mac` | `mac` or `windows`; the setup screens use the computer you're on, and *This computer* tab can change it |
 | `SCHEDULE_HOURS` | `2` | how often to run; also on the settings page |
 | `SCORE_WEIGHT_KEYWORDS` | `0.7` | keyword share of the pre-score (title gets the rest) |
 | `KEYWORD_FULL_MARKS` | `10` | keyword matches that give 100 |
@@ -170,10 +174,10 @@ Two separate settings:
 
 | Profile line | Settings page | Used for |
 |---|---|---|
-| `Search locations: Kitchener ON` and `Search radius (miles): 25` | Search locations, Search radius | Where LinkedIn, Indeed and Glassdoor look. Each board applies the radius itself, so one city also covers its neighbours. Blank search locations fall back to Locations; a blank radius means 25 miles. |
+| `Search locations: Kitchener ON` and `Search radius (miles): 25` | Search locations, Search radius (miles); *Near* and *Within* on the setup screen | Where LinkedIn, Indeed and Glassdoor look. Each board applies the radius itself, so one city also covers its neighbours. Blank search locations fall back to Locations; a blank radius means 25 miles. |
 | `Locations: Kitchener ON, Waterloo ON, Cambridge ON` | Accepted cities | The filter: hybrid and on-site jobs pass only in one of these cities. |
 
-Search wide, accept narrowly. Jobs from inside the radius but outside your accepted cities (Guelph, Brantford, ...) are saved and shown in the audit as "Location not in your cities", so you can spot a city worth adding.
+Search wide, accept narrowly. Jobs from inside the radius but outside your accepted cities (Guelph, Brantford, ...) are saved and shown on the *Jobs found* page as "Location not in your cities", so you can spot a city worth adding.
 
 ## How it works
 
@@ -251,18 +255,27 @@ total    = keywords * 0.70 + title * 0.30
 
 Keywords match case-insensitively as whole words or phrases in the title and description, so `AI/ML` and `Monday.com` work. When "Must-have keywords" is blank, total = title score.
 
-**Tuning:** run `python -m collector ui` and open **Settings**. Move the keyword/title slider, the full-marks count, the two title scores or the email cutoff, and the preview re-scores recent passing jobs and shows which would be emailed, before you save. Saving writes the scoring values to `.env` and the cutoff to your profile. Defaults live in `SCORE_DEFAULTS` in `collector/config.py`. Saved changes apply from the next run; scores already in the database don't change.
+**Tuning:** open the page (double-click the launcher), go to **Settings → Match score**. Move the keyword/title slider, the full-marks count, the two title scores or *Lowest match score to email*, and the preview re-scores recent passing jobs and shows which would be emailed, before you save. Saving writes the scoring values to `.env` and the cutoff to your profile. Defaults live in `SCORE_DEFAULTS` in `collector/config.py`. Saved changes apply from the next run; scores already in the database don't change.
 
 Note that Glassdoor returns no descriptions (JobSpy 1.4.1), so Glassdoor jobs score on title only and dealbreakers are checked against the title alone.
 
 ## Jobs found and settings page
 
-`.venv/bin/python -m collector ui` serves a page on `http://127.0.0.1:8765`. It listens only on your own computer and rejects requests from other sites. Stop it with Ctrl+C.
+The launcher (or `.venv/bin/python -m collector ui`) serves a page on `http://127.0.0.1:8765`. It listens only on your own computer and rejects requests from other sites. Close the launcher window (or press Ctrl+C) to stop it.
+
+- **Setup**: opens by itself the first time, when there's no profile yet. Five screens: the data folder, the job you want (titles, *Near*, *Within (miles)*, remote / hybrid / on-site), email (with *Send test email*; *Skip email* warns that you then get no updates), how often to check (this installs the schedule on this computer), and **Find jobs now**, which runs the first check and shows its progress and result. **Run setup again** on the Settings page reopens it with your current settings filled in.
 
 - **Jobs found**: every saved job, filtered by date found or date posted (Today, Since yesterday, 7 days, 30 days, All, or a custom range). Click a rejection reason to list those jobs, and click *description* to read the text the keyword and dealbreaker checks saw. *Recent runs* lists per-source counts and errors.
 ![JobCollector settings page with a live preview of which jobs would be emailed](docs/settings.png)
 
-- **Settings**: the job search settings (titles, locations, work model, salary floor, keywords, excluded companies), pre-score weights, email cutoff, Gmail addresses and app password, and *Send test email*. The app password is never sent back to the page: leave the field blank to keep the saved one. The preview re-runs the filters and scores on saved jobs with your unsaved values.
+- **Settings**: five tabs, saved together with one **Save settings** button (a dot marks tabs with unsaved changes):
+  - *Search*: job titles to look for, titles to skip, search locations and radius.
+  - *Filters*: accepted cities, remote jobs allowed in, work model, employment type, salary floor, jobs and companies to skip.
+  - *Match score*: keywords, weights, title scores and the lowest score to email.
+  - *Email*: send from / send to, the Gmail address and app password, and *Send test email*. If email isn't set up, a note says Job Collector won't send updates.
+  - *This computer*: the data folder, and the schedule (computer and hours).
+
+  The app password is never sent back to the page: leave the field blank to keep the saved one. The preview beside the tabs re-runs the filters and scores on saved jobs with your unsaved values.
 
 ### Data folder
 
@@ -288,11 +301,11 @@ The page uses plain names for the profile's settings:
 | Lowest match score to email | Email cutoff |
 | Match score (tab) | the pre-score |
 
-No profile yet? Fill in *Job search* and save: the page creates `candidate-profile.md` with just a `## Job Search Settings` section. If the profile has no such section, one is added at the end. Target companies and base resume are still edited in the file.
+No profile yet? The setup screens (or saving *Settings*) create `candidate-profile.md` with just a `## Job Search Settings` section. If the profile has no such section, one is added at the end. Target companies and base resume are still edited in the file.
 
 ## Scheduling (macOS or Windows)
 
-Pick the computer and the interval on the settings page (or `SCHEDULE_PLATFORM` and `SCHEDULE_HOURS` in `.env`), then install:
+The setup screens install the schedule for you, and saving *Settings → This computer* reinstalls it. From a terminal, set `SCHEDULE_PLATFORM` and `SCHEDULE_HOURS` in `.env`, then:
 
 ```bash
 .venv/bin/python -m collector schedule install      # macOS: launchd, runs once now too
@@ -302,15 +315,17 @@ Pick the computer and the interval on the settings page (or `SCHEDULE_PLATFORM` 
 
 On Windows run the same with `.venv\Scripts\python`. That creates a Task Scheduler task called *JobCollector* that runs `windows\run-collector.cmd` every N hours. Installing again after changing the interval replaces the old schedule. If `SCHEDULE_PLATFORM` doesn't match the computer, the command refuses.
 
-Watch the log: `tail -f logs/collector.log` (macOS) or `type logs\collector.log` (Windows).
+Watch the log, which is in your data folder: `tail -f "<data folder>/logs/collector.log"` (macOS) or `type "<data folder>\logs\collector.log"` (Windows). Errors from before logging starts go to `logs/collector.err.log` in the app folder.
 
-A lock file (`data/collector.lock`) stops two runs from overlapping on both systems. The OS releases the lock if a run crashes. When the Mac is asleep, launchd runs the missed job once it wakes. Task Scheduler skips runs missed while Windows was off unless you tick *Run task as soon as possible after a scheduled start is missed* in the task's settings.
+A lock file (`data/collector.lock` in the data folder) stops two runs from overlapping on both systems; a run that finds it taken skips its turn. The OS releases the lock if a run crashes. When the Mac is asleep, launchd runs the missed job once it wakes. Task Scheduler skips runs missed while Windows was off unless you tick *Run task as soon as possible after a scheduled start is missed* in the task's settings.
 
-**macOS privacy:** if the project lives under `~/Documents`, which macOS protects, and `logs/collector.err.log` shows `Operation not permitted`, there are two fixes:
+**macOS privacy:** if the app folder or the data folder lives under `~/Documents` (the setup screens suggest `~/Documents/Job Collector`), which macOS protects, and `logs/collector.err.log` shows `Operation not permitted`, there are two fixes:
 - Give `.venv/bin/python`'s target (for example `/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13`) Full Disk Access in System Settings → Privacy & Security.
-- Or move the project out of `~/Documents`.
+- Or move it out of `~/Documents` (the data folder can be switched on *This computer*).
 
 ## Checking the filters
+
+The *Jobs found* page shows the same thing grouped by reason. From a terminal, in your data folder:
 
 ```bash
 sqlite3 data/jobs.db "SELECT filter_reason, COUNT(*) FROM jobs WHERE filter_passed=0 GROUP BY 1 ORDER BY 2 DESC"
@@ -343,8 +358,11 @@ collector/
   emailer.py       HTML + text email, Gmail SMTP
   pipeline.py      a run, end to end
   schedule.py      launchd / Task Scheduler install
-  webui.py, web/   audit + settings page
+  folder.py        the data folder: switching, copying, the native folder picker
+  webui.py, web/   Jobs found, Settings and setup page; Find jobs now
   cli.py           run / settings / report / ui / schedule
+Launch JobCollector Mac.command, Launch JobCollector Windows.bat
+                   double-click launchers
 launchd/           macOS plist template
 windows/           run-collector.cmd for Task Scheduler
 tests/             pytest suite with offline fixtures
