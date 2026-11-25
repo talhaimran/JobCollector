@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MAC, WIN = ROOT / "Start Job Collector.command", ROOT / "Start Job Collector.bat"
+MAC, WIN = ROOT / "Launch JobCollector Mac.command", ROOT / "Launch JobCollector Windows.bat"
 
 
 def test_launchers_exist_and_parse():
