@@ -72,6 +72,7 @@ def read_config() -> dict:
     out["SEND_WHEN_EMPTY"] = (env.get("SEND_WHEN_EMPTY") or "false").lower() == "true"
     out["SEND_PARTIAL_SCORES"] = (env.get("SEND_PARTIAL_SCORES") or "false").lower() == "true"
     out["SCHEDULE_PLATFORM"] = env.get("SCHEDULE_PLATFORM") or config.SCHEDULE_PLATFORM
+    out["this_platform"] = schedule.this_platform()  # .env may have come from another computer
     out["SCHEDULE_HOURS"] = float(env.get("SCHEDULE_HOURS") or 2)
     for k, d in config.SCORE_DEFAULTS.items():
         out[k] = float(env[k]) if env.get(k) else d
@@ -239,6 +240,7 @@ class Busy(Exception):
     pass
 
 
+ON_WINDOWS = os.name == "nt"
 RUN = {"proc": None, "offset": 0, "watching": False, "after_id": 0}  # the check this page started or joined; where its log lines begin
 _LOG_LINE = re.compile(r"^\S+ \S+ \w+ [\w.]+: ")  # "2026-11-25 10:00:01,000 INFO collector.x: "
 
@@ -264,6 +266,8 @@ def start_run() -> bool:
     RUN["after_id"] = last[0]["id"] if last else 0  # only a run newer than this is "the" result
     if _lock_held():
         RUN["proc"] = None
+        if last and not last[0]["finished_at"]:  # the check we join already wrote its run row
+            RUN["after_id"] -= 1
         return False
     # the child must see the settings saved since this page started (load_dotenv never overrides os.environ)
     env = {**os.environ, **{k: v for k, v in dotenv_values(ENV_PATH).items() if v is not None},
@@ -273,12 +277,16 @@ def start_run() -> bool:
         RUN["proc"] = subprocess.Popen(
             [sys.executable, "-m", "collector", "run"], cwd=config.ROOT, env=env,
             stdout=subprocess.DEVNULL, stderr=err,
-            # its own process group: closing the launcher window doesn't kill the check
-            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}))
+            # closing the launcher window mustn't kill the check: on Windows no console at all (DETACHED_PROCESS
+            # 0x8; a new group 0x200 alone still gets CTRL_CLOSE), elsewhere its own session
+            **({"creationflags": 0x8 | 0x200} if ON_WINDOWS else {"start_new_session": True}))
     return True
 
 
 def run_status(conn) -> dict:
+    code = RUN["proc"].poll() if RUN["proc"] is not None else None
+    if code not in (None, 0, 75):  # crashed (75: lost the lock to a check starting then, which we follow)
+        RUN["after_id"] = None  # so no later run is passed off as its result
     running = (RUN["proc"] is not None and RUN["proc"].poll() is None) or (RUN["watching"] and _lock_held())
     lines = []
     if RUN["watching"] and _log_path().exists():
@@ -290,7 +298,7 @@ def run_status(conn) -> dict:
         lines = [m for m in (_LOG_LINE.sub("", l) for l in text.splitlines() if _LOG_LINE.match(l))
                  if not m.endswith(":") and "{'" not in m]
     last = db.last_runs(conn, 1)
-    mine = last and last[0]["id"] > RUN["after_id"] and last[0]["finished_at"]
+    mine = last and RUN["after_id"] is not None and last[0]["id"] > RUN["after_id"] and last[0]["finished_at"]
     return {"running": running, "lines": lines[-8:], "run": dict(last[0]) if mine and not running else None}
 
 

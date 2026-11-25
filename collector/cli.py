@@ -21,7 +21,7 @@ def cmd_run(args):
     with db.run_lock(config.LOCK_PATH) as got:
         if not got:
             logging.warning("Another run is in progress (lock held); exiting")
-            return
+            raise SystemExit(75)  # EX_TEMPFAIL: tells the page this check didn't run, the other one did
         if moved := folder.saved_elsewhere():  # settings loaded before a folder switch finished
             logging.warning("The data folder changed to %s while this check was starting; skipping it. "
                             "The next check uses the new folder.", moved)

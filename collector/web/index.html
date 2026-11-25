@@ -815,7 +815,7 @@ $("su-next").addEventListener("click", async () => {
     if (STEP === 2 && !(await saveJob())) return;
     if (STEP === 3) { const ok = await saveEmail(true); if (ok === "skip") return $("su-skip-dialog").showModal(); if (!ok) return; }
     if (STEP === 4 && !SCHED_SEEN) {
-      const r = await saving(() => api("/api/config", {SCHEDULE_PLATFORM: CFG.SCHEDULE_PLATFORM, SCHEDULE_HOURS: Number($("su-hours").value)}));
+      const r = await saving(() => api("/api/config", {SCHEDULE_PLATFORM: CFG.this_platform, SCHEDULE_HOURS: Number($("su-hours").value)}));
       CFG = r;
       const msg = r.schedule_message || "";
       if (/^(Settings saved, but|Schedule saved for)/.test(msg)) {  // not applied: say so before moving on

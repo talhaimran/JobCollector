@@ -353,3 +353,91 @@ def test_serve_when_another_program_has_port_says_so_and_opens_nothing(monkeypat
     assert e.value.code == 1
     assert opened == []
     assert f"Port {port} is used by another program" in capsys.readouterr().out
+
+
+def test_run_now_joining_a_check_that_already_has_its_run_row_reports_that_run(server, tmp_path):
+    config.use_folder(tmp_path / "f")
+    try:
+        conn = db.connect(config.DB_PATH)
+        db.start_run(conn, "2026-11-25T09:00:00+00:00", "[]")  # an older, finished run
+        conn.execute("UPDATE runs SET finished_at='2026-11-25T09:05:00+00:00'")
+        with db.run_lock(config.LOCK_PATH):
+            joined = db.start_run(conn, "2026-11-25T11:00:00+00:00", "[]")  # the scheduled check, mid-run
+            assert call(server + "/api/run", {}) == (200, {"started": False})
+            conn.execute("UPDATE runs SET finished_at='2026-11-25T11:04:00+00:00' WHERE id=?", (joined,))
+            conn.commit()
+        st = call(server + "/api/run")[1]
+        assert st["running"] is False and st["run"]["id"] == joined
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+@pytest.mark.parametrize("code, reported", [(1, False), (75, True)])
+def test_run_now_child_that_did_not_run_its_own_check(server, tmp_path, monkeypatch, code, reported):
+    """1: it crashed, so a later run isn't its result. 75: it lost the lock to a check starting at the
+    same moment, so the page follows that check, as when it joins one already running."""
+    import subprocess
+    config.use_folder(tmp_path / "f")
+    try:
+        conn = db.connect(config.DB_PATH)
+
+        class Proc:
+            def poll(self):
+                return code
+        monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: Proc())
+        assert call(server + "/api/run", {}) == (200, {"started": True})
+        other = db.start_run(conn, "2026-11-25T11:00:00+00:00", "[]")
+        conn.execute("UPDATE runs SET finished_at='2026-11-25T11:04:00+00:00' WHERE id=?", (other,))
+        conn.commit()
+        st = call(server + "/api/run")[1]
+        assert st["running"] is False
+        assert (st["run"] is not None and st["run"]["id"] == other) is reported
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_run_lost_to_another_check_exits_75(tmp_path, monkeypatch):
+    import argparse
+    from collector import cli
+    config.use_folder(tmp_path)
+    with db.run_lock(config.LOCK_PATH):
+        with pytest.raises(SystemExit) as e:
+            cli.cmd_run(argparse.Namespace(dry_run=True))
+    assert e.value.code == 75
+    config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_run_now_on_windows_is_detached_from_the_launcher_console(server, tmp_path, monkeypatch):
+    import subprocess
+    config.use_folder(tmp_path / "f")
+    try:
+        seen = {}
+
+        class Proc:
+            def poll(self):
+                return None
+        def popen(cmd, **kw):
+            seen.update(kw)
+            return Proc()
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        monkeypatch.setattr(webui, "ON_WINDOWS", True)
+        assert call(server + "/api/run", {})[0] == 200
+        # DETACHED_PROCESS (0x8): no console, so closing the launcher window doesn't send it CTRL_CLOSE
+        assert seen["creationflags"] & 0x8 and seen["creationflags"] & 0x200
+        assert seen["stdout"] == subprocess.DEVNULL and seen["stderr"] is not None
+        assert "start_new_session" not in seen
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_setup_schedules_for_this_computer_not_the_saved_platform(monkeypatch, tmp_path):
+    from collector import schedule
+    webui.ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    webui.ENV_PATH.write_text("SCHEDULE_PLATFORM=windows\n")  # .env came from another computer
+    monkeypatch.setattr(schedule, "this_platform", lambda: "mac")
+    cfg = webui.read_config()
+    assert cfg["SCHEDULE_PLATFORM"] == "windows" and cfg["this_platform"] == "mac"
+    assert "SCHEDULE_PLATFORM: CFG.this_platform" in webui.PAGE.read_text()  # the wizard's schedule step
