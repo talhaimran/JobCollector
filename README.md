@@ -1,6 +1,6 @@
 # JobCollector: Self-Hosted Job Search Automation for LinkedIn, Indeed and Glassdoor
 
-**Get the jobs that match you emailed every 2 hours, from LinkedIn, Indeed, Glassdoor, Randstad Canada and company career pages. No login, no AI, no subscription.**
+**Get the jobs that match you emailed every 2 hours, from LinkedIn, Indeed, Glassdoor, Randstad, Robert Half and company career pages. No login, no AI, no subscription.**
 
 [![tests](https://github.com/talhaimran/JobCollector/actions/workflows/tests.yml/badge.svg)](https://github.com/talhaimran/JobCollector/actions/workflows/tests.yml)
 [![Release](https://img.shields.io/github/v/release/talhaimran/JobCollector)](https://github.com/talhaimran/JobCollector/releases/latest)
@@ -23,6 +23,7 @@
 - [How it works](#how-it-works)
   - [LinkedIn](#linkedin)
   - [Randstad Canada](#randstad-canada)
+  - [Robert Half Canada](#robert-half-canada)
   - [Pipeline](#pipeline)
   - [How the pre-score works](#how-the-pre-score-works)
 - [Audit and settings page](#audit-and-settings-page)
@@ -43,7 +44,7 @@ It never logs in to any site and uses no AI or paid API. It runs on your own Mac
 
 ## Features
 
-- **Multi-source job aggregation:** LinkedIn (its own rate-limited client), Indeed and Glassdoor via [JobSpy](https://github.com/speedyapply/JobSpy), Randstad Canada, and the public **Greenhouse, Lever and Ashby** job board feeds of the companies you name.
+- **Multi-source job aggregation:** LinkedIn (its own rate-limited client), Indeed and Glassdoor via [JobSpy](https://github.com/speedyapply/JobSpy), Randstad and Robert Half Canada, and the public **Greenhouse, Lever and Ashby** job board feeds of the companies you name.
 - **Cross-site de-duplication:** a company + title + city fingerprint catches the same job on two boards and reposts.
 - **Hard filters:** target and excluded titles, accepted cities, "remote in" countries, work model, employment type, CAD salary floor, excluded companies and dealbreaker phrases. Every rejected job keeps its `filter_reason`.
 - **Keyword pre-score (0–100):** must-have keyword matches plus title match, with weights you tune from a live preview.
@@ -59,7 +60,7 @@ Sites not used: ZipRecruiter and hiring.cafe block scripts outright, and Google 
 | Area | Used |
 |---|---|
 | Language | Python 3.13 (standard library `sqlite3`, `smtplib`, `http.server`) |
-| Job boards | [python-jobspy](https://pypi.org/project/python-jobspy/) 1.4.1 (Indeed, Glassdoor), `requests` + `beautifulsoup4` (LinkedIn, Randstad) |
+| Job boards | [python-jobspy](https://pypi.org/project/python-jobspy/) 1.4.1 (Indeed, Glassdoor), `requests` + `beautifulsoup4` (LinkedIn, Randstad, Robert Half) |
 | Company feeds | Greenhouse, Lever and Ashby public JSON APIs |
 | Storage | SQLite (`data/jobs.db`) |
 | Config | `python-dotenv` (`.env`) + a Markdown profile (`candidate-profile.md`) |
@@ -178,10 +179,20 @@ In the `runs` table, LinkedIn's count is new jobs only (known ones are dropped b
 randstad.ca's search pages carry their results as JSON, 30 per page. Its robots.txt allows the plain keyword search but not the radius, sort or date filters, so each run:
 
 - searches **Canada-wide once per search title** (`/jobs/q-project-manager/`), paging by relevance up to 5 pages (`RANDSTAD_MAX_PAGES`), 3–8 s between requests;
-- keeps jobs created in the last day; Accepted cities and Remote in do the location filtering;
+- keeps jobs dated today or yesterday (postings have a date but no time) and undated ones; Accepted cities and Remote in do the location filtering;
 - fetches the job page for the full description, only for new jobs that pass the filters. The search results give just its first few lines.
 
 Any HTTP error (403, 429) ends Randstad for that run and is recorded in the `runs` table. The next run tries again. Most postings are Randstad's own, so the company shows as "Randstad Canada".
+
+### Robert Half Canada
+
+`roberthalf.com/ca/en/jobs/all/<title>` is a keyword search across Canada, newest first, 25 per page. The page carries the results as JSON with everything needed: full description, remote/hybrid/on-site, pay and posting date. So each run:
+
+- searches **once per search title**, usually a single request, paging (`?pagenumber=2`, up to 4 pages) only until it reaches a job dated before yesterday (undated jobs are kept and don't stop the paging);
+- fetches no job pages;
+- reads the work model from Robert Half's own remote/hybrid/on-site field, and "Contract to Permanent" counts as both contract and full-time.
+
+Like Randstad, it waits 3–8 s between requests, and an HTTP error ends Robert Half for that run only. Robert Half doesn't name its clients, so the company shows as "Robert Half (client not named)".
 
 ### Partial scores
 
@@ -194,7 +205,7 @@ Taken from the source's own field when there is one, then the title and location
 ### Pipeline
 
 1. **Normalize** every posting into one shape (see `collector/normalize.py`).
-2. **De-duplicate:** a job already stored with the same `(source, source_job_id)` or URL is skipped. Otherwise the collector builds a fingerprint from company + title + city, with suffixes like Inc and Ltd stripped. If an earlier row (from any source, reposts included) has the same fingerprint, the new row is saved with `duplicate_of` set and is never emailed.
+2. **De-duplicate:** a job already stored with the same `(source, source_job_id)` or URL is skipped. Otherwise the collector builds a fingerprint from company + title + city, with suffixes like Inc and Ltd stripped. If an earlier row (from any source, reposts included) has the same fingerprint, the new row is saved with `duplicate_of` set and is never emailed. Randstad and Robert Half jobs are the exception: those agencies rarely name the client, so two of their jobs with the same title and city would look identical. They're matched by their own job ID only, which means an agency repost under a new ID is emailed again.
 3. **Hard filters**, in order. The first failure is saved in `filter_reason`:
    1. excluded company
    2. exclude titles (whole word)
@@ -282,7 +293,7 @@ collector/
   config.py        knobs: weights, delays, sites, results per query
   settings.py      Job Search Settings parser
   sources/         linkedin.py (own client, request budget), jobspy_src.py (Indeed, Glassdoor),
-                   randstad.py (randstad.ca), feeds.py (Greenhouse/Lever/Ashby), shared HTTP retry
+                   randstad.py, roberthalf.py, feeds.py (Greenhouse/Lever/Ashby), shared HTTP retry
   normalize.py     one job shape, work-model detection, phrase matching
   dedupe.py        fingerprints
   filters.py       hard filters

@@ -50,7 +50,7 @@ class FakeSite:
             return Resp(page("jobData", [src(0, snippet="Hybrid, 3 days a week in our Waterloo office. Jira, Agile.")], 1))
         if url.endswith("page-2/"):
             return Resp(page("searchResults", [src(100 + i) for i in range(5)], 35))
-        hits = [src(i) for i in range(28)] + [src(28, created="2026-10-01"), src(29, city="Toronto")]
+        hits = [src(i) for i in range(27)] + [src(27, created=None), src(28, created="2026-10-01"), src(29, city="Toronto")]
         return Resp(page("searchResults", hits, 35))
 
 
@@ -84,12 +84,21 @@ def test_fetch_pages_filters_and_job_pages(conn, s):
     assert [u for u in site.calls if "/q-" in u] == [site.calls[0], site.calls[0] + "page-2/"]
     ids = {j["source_job_id"] for j in jobs}
     assert "rs-REF28" not in ids  # older than HOURS_OLD
+    assert "rs-REF27" in ids  # undated: kept
     assert len(jobs) == 34
     toronto = next(j for j in jobs if j["source_job_id"] == "rs-REF29")
     assert toronto["description"] is None  # failed the location filter: no job page fetched
     local = next(j for j in jobs if j["source_job_id"] == "rs-REF0")
     assert "Jira" in local["description"] and local["work_model"] == "hybrid"
     assert len(site.calls) == 2 + 33  # 2 search pages + job pages for the 33 Waterloo jobs
+
+
+def test_malformed_job_is_skipped_not_the_page(conn, s):
+    bad = src(1); del bad["JobId"]
+    pay = src(2, salary={"SalaryMin": "competitive", "SalaryMax": "", "CompensationType": "per year"})
+    site = lambda url, **kw: Resp(page("searchResults", [bad, pay, src(3)], 3)) if "/q-" in url else Resp(page("jobData", [src(3)], 1))
+    jobs = randstad.fetch(conn, s, get=site, sleep=lambda x: None, now=NOW)
+    assert [j["source_job_id"] for j in jobs] == ["rs-REF3"]
 
 
 def test_known_jobs_skipped(conn, s):
@@ -106,5 +115,5 @@ def test_blocked_raises_and_pipeline_records_it(conn, s):
         raise requests.HTTPError("429")
     jobs, found, errors, _ = pipeline.collect(conn, s, lambda s: ([], {}, {}), lambda c: [],
                                               lambda conn, s: {"jobs": [], "refreshed": {}, "found": 0, "errors": [], "skipped": "x"},
-                                              blocked)
+                                              {"randstad": blocked})
     assert errors["randstad"] == ["randstad: HTTPError: 429"] and jobs == []

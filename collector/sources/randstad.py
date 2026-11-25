@@ -8,7 +8,6 @@ get their job page fetched for the full one. Any 403/429 or other HTTP error end
 """
 import json
 import logging
-import random
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -16,8 +15,8 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from .. import config, db, filters, normalize
+from . import PoliteClient
 from .jobspy_src import search_titles
-from .linkedin import HEADERS
 
 log = logging.getLogger(__name__)
 BASE = "https://www.randstad.ca"
@@ -73,32 +72,24 @@ def parse_detail(html: str) -> dict:
     return {"description": desc} if desc else {}
 
 
-class Client:
-    def __init__(self, get=None, sleep=time.sleep):
-        self._get, self._sleep, self.used = get or requests.Session().get, sleep, 0
-
-    def get(self, url):
-        if self.used:
-            self._sleep(random.uniform(*config.RANDSTAD_DELAY_SECONDS))
-        self.used += 1
-        r = self._get(url, headers=HEADERS, timeout=config.HTTP_TIMEOUT)
-        r.raise_for_status()  # 403/429 included: stop for this run, the next run tries again
-        return r
-
-
 def fetch(conn, s, get=None, sleep=time.sleep, now=None) -> list[dict]:
     """New recent jobs for every search title. Raises on HTTP errors; jobs found before an error are lost
     for this run only (they're still recent next run)."""
     now = now or datetime.now(timezone.utc)
-    since = (now - timedelta(hours=config.HOURS_OLD)).date().isoformat()  # dates only, so up to a day of overlap
-    client, jobs, known = Client(get, sleep), [], set()
+    # whole days: postings carry a date, not a time, so a job from early yesterday still counts (known jobs are skipped)
+    since = (now - timedelta(hours=config.HOURS_OLD)).date().isoformat()
+    client, jobs, known = PoliteClient(config.RANDSTAD_DELAY_SECONDS, get, sleep), [], set()
     for title in search_titles(s.target_titles):
         for page in range(config.RANDSTAD_MAX_PAGES):
             url = f"{BASE}/jobs/q-{slug(title)}/" + (f"page-{page + 1}/" if page else "")
             raw, total = parse_search(client.get(url).text)
             for src in raw:
-                j = to_job(src)
-                if (j["posted_at"] or "") < since or j["source_job_id"] in known \
+                try:
+                    j = to_job(src)
+                except (KeyError, ValueError, TypeError) as e:  # one malformed posting mustn't lose the rest
+                    log.warning("randstad: skipped a malformed job (%s: %s)", type(e).__name__, e)
+                    continue
+                if (j["posted_at"] and j["posted_at"] < since) or j["source_job_id"] in known \
                         or db.seen(conn, j["source"], j["source_job_id"], j["url"]):
                     continue
                 known.add(j["source_job_id"])
