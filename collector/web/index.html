@@ -112,6 +112,12 @@ textarea { font: inherit; resize: vertical; }
 .tabs button:hover { color: var(--fg); }
 .tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
 .tabs .dot { color: var(--accent); }
+.pathline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pathline code { font-family: var(--mono); font-size: 12.5px; background: var(--bg); border-radius: 6px; padding: 7px 10px; overflow-wrap: anywhere; flex: 1 1 240px; }
+.pathline input { flex: 1 1 240px; }
+.folder-pick { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 10px; }
+.folder-pick p { margin: 0; line-height: 1.5; }
+.sub-h { font-size: 14px; font-weight: 600; margin: 8px 0 0; }
 .delta.up { color: var(--pass); } .delta.down { color: var(--fail); }
 </style>
 </head>
@@ -178,7 +184,7 @@ textarea { font: inherit; resize: vertical; }
         <button type="button" role="tab" id="t-filters" data-tab="filters" aria-controls="tab-filters" aria-selected="false" tabindex="-1">Filters<span class="dot" hidden> •</span></button>
         <button type="button" role="tab" id="t-scoring" data-tab="scoring" aria-controls="tab-scoring" aria-selected="false" tabindex="-1">Scoring<span class="dot" hidden> •</span></button>
         <button type="button" role="tab" id="t-email" data-tab="email" aria-controls="tab-email" aria-selected="false" tabindex="-1">Email<span class="dot" hidden> •</span></button>
-        <button type="button" role="tab" id="t-schedule" data-tab="schedule" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Schedule<span class="dot" hidden> •</span></button>
+        <button type="button" role="tab" id="t-schedule" data-tab="schedule" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">This computer<span class="dot" hidden> •</span></button>
       </div>
       <section class="group" role="tabpanel" id="tab-search" aria-labelledby="t-search" hidden>
         <p class="hint">What the job boards are asked for. Lists are comma-separated.</p>
@@ -256,6 +262,21 @@ textarea { font: inherit; resize: vertical; }
       </section>
 
       <section class="group" role="tabpanel" id="tab-schedule" aria-labelledby="t-schedule" hidden>
+        <fieldset class="field">
+          <legend>Data folder</legend>
+          <span class="hint">Your job search settings, saved jobs and logs live here. A synced folder (iCloud Drive, Dropbox, OneDrive) keeps a backup. Your Gmail password stays in the app folder.</span>
+          <div class="pathline"><code id="folder-now">–</code><button type="button" class="btn" id="folder-choose">Choose folder…</button></div>
+          <div class="field" id="folder-manual" hidden>
+            <label for="folder-path">Or paste a folder path</label>
+            <div class="pathline"><input type="text" id="folder-path" data-local spellcheck="false" autocomplete="off"><button type="button" class="btn" id="folder-check">Check</button></div>
+          </div>
+          <div class="folder-pick" id="folder-pick" hidden>
+            <p id="folder-desc"></p>
+            <div class="actions" id="folder-actions"></div>
+          </div>
+          <span class="status" id="folder-status" role="status" aria-live="polite"></span>
+        </fieldset>
+        <h3 class="sub-h">Schedule</h3>
         <p class="hint">How often the collector runs on this computer. LinkedIn is searched at most every 4 hours whatever this says.</p>
         <div class="row2">
           <div class="field"><label for="platform">Computer</label>
@@ -457,7 +478,7 @@ document.querySelector(".tabs").addEventListener("keydown", e => {
   if (j !== undefined) { e.preventDefault(); goTab(TABS[j % n], true); }
 });
 // unsaved-change dots: compare each panel's inputs with what was loaded
-const panelState = t => [...$("tab-" + t).querySelectorAll("input, select, textarea")].map(el => el.type === "checkbox" ? el.checked : el.value).join("\u0000");
+const panelState = t => [...$("tab-" + t).querySelectorAll("input:not([data-local]), select, textarea")].map(el => el.type === "checkbox" ? el.checked : el.value).join("\u0000");
 let SAVED = {};
 const markDirty = () => TABS.forEach(t => $("t-" + t).querySelector(".dot").hidden = !(t in SAVED) || panelState(t) === SAVED[t]);
 $("cfg").addEventListener("input", markDirty);
@@ -503,6 +524,7 @@ async function loadSettings() {
   $("p-salary_floor").value = P.salary_floor ?? "";
   $("p-search_radius").value = P.search_radius ?? ""; $("p-search_radius").placeholder = CFG.default_radius; radiusHint();
   $("profile-new").hidden = CFG.profile_exists;
+  $("folder-now").textContent = CFG.job_folder;
   $("kw-count").textContent = kwCount();
   updateFormula(); schedulePreview();
   TABS.forEach(t => SAVED[t] = panelState(t)); markDirty();
@@ -566,6 +588,57 @@ $("test").addEventListener("click", async () => {
   try { await api("/api/test-email", {}); status(`Test email sent to ${CFG?.EMAIL_TO || "your address"}. Uses saved settings.`, true); }
   catch (err) { status(err.message, false); }
   finally { $("test").disabled = false; }
+});
+
+/* ---------- data folder ---------- */
+let PICKED = null;
+const folderStatus = (msg, ok) => { $("folder-status").textContent = msg; $("folder-status").className = "status " + (ok ? "ok" : "bad"); };
+$("folder-choose").addEventListener("click", async () => {
+  $("folder-choose").disabled = true;
+  folderStatus("A folder picker opened. If you don't see it, check behind this browser window.", true);
+  try {
+    const r = await api("/api/folder/choose", {});
+    if (r.path) await pickFolder(r.path); else folderStatus("No folder chosen.", true);
+  } catch (e) {
+    $("folder-manual").hidden = false;
+    folderStatus("The folder picker didn't open here. Paste the folder's path instead.", false);
+  } finally { $("folder-choose").disabled = false; }
+});
+$("folder-check").addEventListener("click", () => pickFolder($("folder-path").value.trim()));
+$("folder-path").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); pickFolder($("folder-path").value.trim()); } });
+async function pickFolder(path) {
+  $("folder-pick").hidden = true;
+  let d;
+  try { d = await api("/api/folder?" + new URLSearchParams({path})); } catch (e) { return folderStatus(e.message, false); }
+  if (d.problem) return folderStatus(d.problem, false);
+  PICKED = d.path;
+  folderStatus("", true);
+  $("folder-desc").innerHTML = d.has_data
+    ? `<code>${esc(d.path)}</code> already has Job Collector data. Job Collector will use it as it is; your current folder isn't changed.`
+    : `Move to <code>${esc(d.path)}</code>? Nothing is deleted: your current folder stays as it is.`;
+  $("folder-actions").innerHTML = (d.has_data
+    ? `<button type="button" class="btn primary" data-mode="use">Use the data already there</button>`
+    : `<button type="button" class="btn primary" data-mode="copy">Copy my data there</button>
+       <button type="button" class="btn" data-mode="fresh">Start fresh there</button>`) +
+    `<button type="button" class="btn" data-mode="">Cancel</button>`;
+  $("folder-pick").hidden = false;
+  $("folder-actions").querySelector("button").focus();
+}
+$("folder-actions").addEventListener("click", async e => {
+  const b = e.target.closest("[data-mode]"); if (!b) return;
+  if (!b.dataset.mode) { $("folder-pick").hidden = true; return folderStatus("", true); }
+  if (TABS.some(t => !$("t-" + t).querySelector(".dot").hidden) &&
+      !confirm("You have unsaved changes. Switching folders reloads the settings from the new folder, so those changes are lost. Switch anyway?")) return;
+  $("folder-actions").querySelectorAll("button").forEach(x => x.disabled = true);
+  try {
+    const r = await api("/api/folder", {path: PICKED, mode: b.dataset.mode});
+    $("folder-pick").hidden = true; $("folder-manual").hidden = true;
+    await loadSettings(); loadJobs(); loadRuns();
+    folderStatus(r.message, true);
+  } catch (err) {
+    folderStatus(err.message, false);
+    $("folder-actions").querySelectorAll("button").forEach(x => x.disabled = false);
+  }
 });
 
 /* ---------- boot ---------- */

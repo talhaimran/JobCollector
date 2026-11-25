@@ -143,7 +143,7 @@ A run searches each location and "Remote in" country once per search title. Targ
 
 | Key | Default | Meaning |
 |---|---|---|
-| `JOB_FOLDER` | this project folder | folder containing `candidate-profile.md` |
+| `JOB_FOLDER` | this project folder | the data folder: `candidate-profile.md`, `data/jobs.db` and `logs/` (set it from the settings page, *This computer* tab) |
 | `EMAIL_FROM`, `EMAIL_TO`, `SMTP_USER` | – | your Gmail address(es) |
 | `SMTP_APP_PASSWORD` | – | a Gmail **app password** (Google Account → Security → 2-Step Verification → App passwords) |
 | `RESULTS_WANTED` | `25` | results per JobSpy query |
@@ -256,6 +256,17 @@ Note that Glassdoor returns no descriptions (JobSpy 1.4.1), so Glassdoor jobs sc
 ![JobCollector settings page with a live preview of which jobs would be emailed](docs/settings.png)
 
 - **Settings**: the job search settings (titles, locations, work model, salary floor, keywords, excluded companies), pre-score weights, email cutoff, Gmail addresses and app password, and *Send test email*. The app password is never sent back to the page: leave the field blank to keep the saved one. The preview re-runs the filters and scores on saved jobs with your unsaved values.
+
+### Data folder
+
+The profile, the database (`data/jobs.db`) and the run log (`logs/collector.log`) live together in one **data folder**, so you can back it up, keep it in iCloud Drive, Dropbox or OneDrive, or move to a new computer by copying one folder. `.env`, with your Gmail app password, stays in the app folder and is never copied.
+
+On the *This computer* tab, **Choose folder…** opens your computer's own folder picker (paste a path instead if it can't open). Then:
+
+- the folder already has Job Collector data → **Use the data already there** (nothing is overwritten);
+- otherwise → **Copy my data there** or **Start fresh there**.
+
+Nothing is ever deleted: the old folder stays as it was. Switching is refused while a check is running. Scheduled runs pick up the new folder on their next start. Before this version the database lived in `<app folder>/data`; the first run after upgrading copies it into the data folder and leaves the original.
 
 No profile yet? Fill in *Job search* and save: the page creates `candidate-profile.md` with just a `## Job Search Settings` section. If the profile has no such section, one is added at the end. Target companies and base resume are still edited in the file.
 

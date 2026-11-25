@@ -1,5 +1,6 @@
 import json
 import threading
+import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 
@@ -170,3 +171,24 @@ def test_serve_when_port_busy_opens_browser_and_returns(monkeypatch):
     finally:
         busy.close()
     assert opened == [f"http://127.0.0.1:{port}/"]
+
+
+def test_folder_endpoints(server, tmp_path, monkeypatch):
+    from collector import folder
+    config.use_folder(tmp_path / "cur")
+    try:
+        monkeypatch.setattr(folder, "choose_native", lambda: "/Users/x/Job Collector")
+        assert call(server + "/api/folder/choose", {}) == (200, {"path": "/Users/x/Job Collector"})
+        monkeypatch.setattr(folder, "choose_native", lambda: None)
+        assert call(server + "/api/folder/choose", {}) == (200, {"path": None})
+
+        target = tmp_path / "New Folder"
+        code, d = call(server + "/api/folder?path=" + urllib.parse.quote(str(target)))
+        assert code == 200 and d == {"path": str(target), "has_data": False, "problem": None}
+
+        code, cfg = call(server + "/api/folder", {"path": str(target), "mode": "fresh"})
+        assert code == 200 and cfg["job_folder"] == str(target) and "starting fresh" in cfg["message"]
+        assert call(server + "/api/config")[1]["job_folder"] == str(target)
+        assert call(server + "/api/folder", {"path": "relative", "mode": "fresh"})[0] == 400
+    finally:
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
