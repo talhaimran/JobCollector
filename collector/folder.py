@@ -10,6 +10,7 @@ from pathlib import Path
 from . import config, db
 
 log = logging.getLogger(__name__)
+ON_WINDOWS = os.name == "nt"
 
 
 def _copy_db(src, dst):
@@ -19,11 +20,19 @@ def _copy_db(src, dst):
         a.backup(b)
 
 
+def _moved_marker():
+    return config.LEGACY_DB.with_name("MOVED.txt")
+
+
 def migrate_legacy() -> str | None:
-    """Once: the database moved from <app>/data into the data folder. Copy it there; the original stays."""
-    if config.DB_PATH.exists() or not config.LEGACY_DB.exists() or config.DB_PATH == config.LEGACY_DB:
+    """Once: the database moved from <app>/data into the data folder. Copy it there; the original stays.
+    A marker next to the old database makes it once for real: a deleted or not-yet-synced jobs.db later
+    must not be refilled with old jobs."""
+    if (config.DB_PATH.exists() or not config.LEGACY_DB.exists() or config.DB_PATH == config.LEGACY_DB
+            or _moved_marker().exists()):
         return None
     _copy_db(config.LEGACY_DB, config.DB_PATH)
+    _moved_marker().write_text(f"Copied to {config.DB_PATH}; Job Collector no longer reads this folder's jobs.db.\n")
     msg = f"Database copied from {config.LEGACY_DB} to {config.DB_PATH} (the original was left in place)."
     log.info(msg)
     return msg
@@ -37,7 +46,9 @@ def describe(path: str) -> dict:
     """What the page needs to know before switching: is it usable, and does it already hold data?"""
     p = Path(path).expanduser()
     problem = None
-    if not p.is_absolute():
+    if any(ord(c) < 32 for c in path):
+        problem = "That path has a line break or other control character in it."
+    elif not p.is_absolute():
         problem = "Choose a full folder path, e.g. /Users/you/Documents/Job Collector."
     elif p.exists() and not p.is_dir():
         problem = "That's a file, not a folder."
@@ -71,7 +82,11 @@ def switch(path: str, mode: str) -> str:
                 shutil.copy2(config.PROFILE_PATH, target / "candidate-profile.md")
             if config.DB_PATH.exists():
                 _copy_db(config.DB_PATH, target / "data" / "jobs.db")
-    webui.update_env(webui.ENV_PATH, {"JOB_FOLDER": str(target)})  # scheduled runs read it from .env
+    # single-quoted for dotenv: a '#' would otherwise start a comment, and double quotes expand \n in C:\new
+    quoted = "'" + str(target).replace("\\", "\\\\").replace("'", "\\'") + "'"
+    webui.update_env(webui.ENV_PATH, {"JOB_FOLDER": quoted})  # scheduled runs read it from .env
+    if config.LEGACY_DB.exists() and target / "data" / "jobs.db" != config.LEGACY_DB:
+        _moved_marker().write_text(f"Data folder switched to {target}.\n")  # never seed it with old jobs
     config.use_folder(target)
     log.info("data folder: %s -> %s (%s)", old, target, mode)
     return {"use": f"Now using {target} and the data already there.",
@@ -83,17 +98,19 @@ def choose_native() -> str | None:
     """Open the operating system's folder picker (the page can't learn real paths itself).
     Returns None when cancelled; RuntimeError when no picker is available."""
     prompt = "Choose where Job Collector keeps your data"
-    if os.name == "nt":
+    if ON_WINDOWS:
         cmd = ["powershell", "-NoProfile", "-STA", "-Command",
-               "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+               "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; "
                f"$d.Description = '{prompt}'; if ($d.ShowDialog() -eq 'OK') {{ $d.SelectedPath }}"]
     else:
         cmd = ["osascript", "-e", f'POSIX path of (choose folder with prompt "{prompt}")']
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         raise RuntimeError(f"No folder picker available ({type(e).__name__})") from e
     out = r.stdout.strip()
-    if r.returncode != 0 or not out:
-        return None  # cancelled
+    if r.returncode != 0 and "(-128)" not in r.stderr:  # -128: osascript's "User canceled"
+        raise RuntimeError(f"Folder picker failed: {r.stderr.strip()[:200]}")
+    if not out:
+        return None  # cancelled (PowerShell prints nothing)
     return out.rstrip("/\\") or out

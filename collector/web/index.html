@@ -598,7 +598,8 @@ $("folder-choose").addEventListener("click", async () => {
   folderStatus("A folder picker opened. If you don't see it, check behind this browser window.", true);
   try {
     const r = await api("/api/folder/choose", {});
-    if (r.path) await pickFolder(r.path); else folderStatus("No folder chosen.", true);
+    if (r.path) await pickFolder(r.path);
+    else { $("folder-manual").hidden = false; folderStatus("No folder chosen. You can also paste a folder's path below.", true); }
   } catch (e) {
     $("folder-manual").hidden = false;
     folderStatus("The folder picker didn't open here. Paste the folder's path instead.", false);

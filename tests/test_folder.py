@@ -75,7 +75,8 @@ def test_copy_into_folder_with_spaces(app, tmp_path):
     assert config.JOB_FOLDER == target and str(target) in msg
     assert "Project Manager" in (target / "candidate-profile.md").read_text()
     assert db.kv_get(db.connect(target / "data" / "jobs.db"), "marker") == "mine"
-    assert f"JOB_FOLDER={target}" in env.read_text()
+    from dotenv import dotenv_values
+    assert dotenv_values(env)["JOB_FOLDER"] == str(target)
     assert (tmp_path / "current" / "data" / "jobs.db").exists()  # nothing deleted
 
 
@@ -121,7 +122,64 @@ def test_describe_problems(app, tmp_path):
 def test_choose_native_cancel_returns_none(monkeypatch):
     import subprocess
     from collector import folder
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, stdout="", stderr="User canceled."))
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, stdout="", stderr="execution error: User canceled. (-128)"))
     assert folder.choose_native() is None
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout="/Users/x/Job Collector/\n", stderr=""))
     assert folder.choose_native() == "/Users/x/Job Collector"
+
+
+def test_folder_name_with_hash_and_quote_round_trips_through_env(app, tmp_path):
+    from dotenv import dotenv_values
+    folder, env = app
+    target = tmp_path / "Job #2 it's"
+    folder.switch(str(target), "fresh")
+    assert dotenv_values(env)["JOB_FOLDER"] == str(target)  # scheduled runs read it from here
+
+
+def test_control_characters_rejected(app, tmp_path):
+    folder, _ = app
+    assert folder.describe(str(tmp_path / "x\nEMAIL_TO=a@b"))["problem"]
+
+
+def test_migration_happens_once_even_if_the_db_goes_missing(tmp_path, monkeypatch):
+    from collector import folder
+    legacy = tmp_path / "app" / "data" / "jobs.db"
+    db.connect(legacy).close()
+    monkeypatch.setattr(config, "LEGACY_DB", legacy)
+    config.use_folder(tmp_path / "mine")
+    assert folder.migrate_legacy()
+    config.DB_PATH.unlink()  # user deletes it to start over, or a synced copy isn't downloaded yet
+    assert folder.migrate_legacy() is None and not config.DB_PATH.exists()
+
+
+def test_no_migration_into_a_folder_switched_to(app, tmp_path, monkeypatch):
+    folder, _ = app
+    legacy = tmp_path / "legacy" / "data" / "jobs.db"
+    db.connect(legacy).close()
+    monkeypatch.setattr(config, "LEGACY_DB", legacy)
+    folder.switch(str(tmp_path / "fresh"), "fresh")
+    assert folder.migrate_legacy() is None  # a run before the page creates the db must not seed old jobs
+
+
+def test_osascript_only_cancel_is_none_other_failures_raise(monkeypatch):
+    import subprocess
+    from collector import folder
+    run = lambda code, err: (lambda *a, **k: subprocess.CompletedProcess(a, code, stdout="", stderr=err))
+    monkeypatch.setattr(subprocess, "run", run(1, "execution error: User canceled. (-128)"))
+    assert folder.choose_native() is None
+    monkeypatch.setattr(subprocess, "run", run(1, "execution error: Not authorized to send Apple events. (-1743)"))
+    with pytest.raises(RuntimeError):
+        folder.choose_native()
+
+
+def test_windows_picker_output_decoded_as_utf8(monkeypatch):
+    import subprocess
+    from collector import folder
+    seen = {}
+    def fake(cmd, **kw):
+        seen.update(kw, script=cmd[-1])
+        return subprocess.CompletedProcess(cmd, 0, stdout="C:\\Users\\Zoë\\Documents\\Café\r\n", stderr="")
+    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(folder, "ON_WINDOWS", True)
+    assert folder.choose_native() == "C:\\Users\\Zoë\\Documents\\Café"
+    assert seen["encoding"] == "utf-8" and "OutputEncoding" in seen["script"]
