@@ -8,9 +8,14 @@ import pytest
 
 from collector import config, db, emailer, pipeline
 from collector.settings import Settings, TargetCompany
-from collector.sources import feeds, jobspy_src
+from collector.sources import feeds, jobspy_src, randstad
 
 FIX = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def no_randstad(monkeypatch):
+    monkeypatch.setattr(randstad, "fetch", lambda conn, s: [])
 
 
 @pytest.fixture
