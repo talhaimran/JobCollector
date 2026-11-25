@@ -183,3 +183,76 @@ def test_windows_picker_output_decoded_as_utf8(monkeypatch):
     monkeypatch.setattr(folder, "ON_WINDOWS", True)
     assert folder.choose_native() == "C:\\Users\\Zoë\\Documents\\Café"
     assert seen["encoding"] == "utf-8" and "OutputEncoding" in seen["script"]
+
+
+@pytest.mark.parametrize("name", ["candidate-profile.md", "data/jobs.db", "data", "logs"])
+def test_symlink_in_target_refused_and_nothing_written_through_it(app, tmp_path, name):
+    folder, _ = app
+    target, outside = tmp_path / "picked", tmp_path / "elsewhere" / "victim"
+    (target / "data").mkdir(parents=True)
+    outside.parent.mkdir()
+    link = target / name
+    if link.is_dir():
+        link.rmdir()
+    link.symlink_to(outside)  # dangling: .exists() is False
+    assert "shortcut" in folder.describe(str(target))["problem"]
+    for mode in ("copy", "fresh", "use"):
+        with pytest.raises(ValueError, match="shortcut"):
+            folder.switch(str(target), mode)
+    assert not outside.exists() and config.JOB_FOLDER == tmp_path / "current"
+
+
+def test_symlink_planted_after_the_check_still_refused(app, tmp_path, monkeypatch):
+    folder, _ = app
+    target, outside = tmp_path / "picked", tmp_path / "victim.md"
+    real_lock = db.run_lock
+
+    def lock_then_plant(path):  # the link appears between the first check and the copy
+        target.mkdir(exist_ok=True)
+        (target / "candidate-profile.md").symlink_to(outside)
+        return real_lock(path)
+
+    monkeypatch.setattr(folder.db, "run_lock", lock_then_plant)
+    with pytest.raises(ValueError, match="shortcut"):
+        folder.switch(str(target), "copy")
+    assert not outside.exists()
+
+
+def test_switch_keeps_the_lock_until_the_new_folder_is_saved(app, tmp_path, monkeypatch):
+    folder, _ = app
+    from collector import webui
+    old_lock, real_update = config.LOCK_PATH, webui.update_env
+    held = []
+
+    def update_env(path, values):  # a scheduled run starting now must skip, not use the old folder
+        with db.run_lock(old_lock) as got:
+            held.append(not got)
+        return real_update(path, values)
+
+    monkeypatch.setattr(webui, "update_env", update_env)
+    folder.switch(str(tmp_path / "new"), "copy")
+    assert held == [True]
+
+
+def test_copy_db_closes_both_connections(tmp_path, monkeypatch):
+    import sqlite3
+    from collector import folder
+    src = tmp_path / "a.db"
+    sqlite3.connect(src).close()
+    opened, real_connect = [], sqlite3.connect
+
+    class Tracked:
+        def __init__(self, *a):
+            self.c, self.closed = real_connect(*a), False
+            opened.append(self)
+        def __getattr__(self, n):
+            return getattr(self.c, n)
+        def backup(self, other):
+            return self.c.backup(other.c)
+        def close(self):
+            self.closed = True
+            self.c.close()
+
+    monkeypatch.setattr(folder.sqlite3, "connect", Tracked)
+    folder._copy_db(src, tmp_path / "out" / "b.db")
+    assert len(opened) == 2 and all(c.closed for c in opened)
