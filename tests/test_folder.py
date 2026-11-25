@@ -303,3 +303,28 @@ def test_run_started_before_a_switch_skips_instead_of_using_the_old_folder(app, 
     config.use_folder(tmp_path / "new")
     cli.cmd_run(argparse.Namespace(dry_run=True))  # the next check uses the new folder
     assert ran == [tmp_path / "new"]
+
+
+def test_a_slower_migration_never_overwrites_one_already_published(tmp_path, monkeypatch):
+    import sqlite3
+    from collector import folder
+    legacy = tmp_path / "app" / "data" / "jobs.db"
+    old = db.connect(legacy)
+    db.kv_set(old, "marker", "legacy snapshot")
+    old.commit()
+    old.close()
+    monkeypatch.setattr(config, "LEGACY_DB", legacy)
+    config.use_folder(tmp_path / "mine")
+    real_backup = folder._backup
+
+    def other_process_wins_meanwhile(a, b):
+        real_backup(a, b)
+        won = db.connect(config.DB_PATH)  # process B published first and its run already wrote a job
+        db.kv_set(won, "marker", "B's newer data")
+        won.commit()
+        won.close()
+
+    monkeypatch.setattr(folder, "_backup", other_process_wins_meanwhile)
+    assert folder.migrate_legacy() is None  # A lost the race: it doesn't publish
+    assert db.kv_get(db.connect(config.DB_PATH), "marker") == "B's newer data"
+    assert [p.name for p in config.DB_PATH.parent.iterdir() if "partial" in p.name] == []
