@@ -14,11 +14,21 @@ log = logging.getLogger(__name__)
 ON_WINDOWS = os.name == "nt"
 
 
+def _backup(a, b):
+    a.backup(b)
+
+
 def _copy_db(src, dst):
-    """A consistent copy even if the source is open (sqlite's backup API, not a file copy)."""
+    """A consistent copy even if the source is open (sqlite's backup API, not a file copy). Written beside
+    dst and renamed into place, so another process never opens a half-copied database."""
     dst.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(src)) as a, closing(sqlite3.connect(dst)) as b:
-        a.backup(b)
+    part = dst.with_name(f"{dst.name}.partial-{os.getpid()}")
+    try:
+        with closing(sqlite3.connect(src)) as a, closing(sqlite3.connect(part)) as b:
+            _backup(a, b)
+        os.replace(part, dst)
+    finally:
+        part.unlink(missing_ok=True)
 
 
 def _moved_marker():
@@ -102,6 +112,11 @@ def switch(path: str, mode: str) -> str:
                 shutil.copy2(config.PROFILE_PATH, target / "candidate-profile.md")
             if config.DB_PATH.exists():
                 _copy_db(config.DB_PATH, target / "data" / "jobs.db")
+            for f in config.LOGS_DIR.glob("*"):
+                to = target / "logs" / f.name
+                if f.is_file() and not to.exists():  # keep any log already there
+                    to.parent.mkdir(exist_ok=True)
+                    shutil.copy2(f, to)
         # single-quoted for dotenv: a '#' would otherwise start a comment, and double quotes expand \n in C:\new
         quoted = "'" + str(target).replace("\\", "\\\\").replace("'", "\\'") + "'"
         webui.update_env(webui.ENV_PATH, {"JOB_FOLDER": quoted})  # scheduled runs read it from .env
@@ -112,6 +127,16 @@ def switch(path: str, mode: str) -> str:
     return {"use": f"Now using {target} and the data already there.",
             "copy": f"Now using {target}. Your data was copied there; {old} was left as it was.",
             "fresh": f"Now using {target}, starting fresh. Your old data is still in {old}."}[mode]
+
+
+def saved_elsewhere() -> Path | None:
+    """The folder .env names now, if it isn't the one this process loaded at start (it switched meanwhile)."""
+    from . import webui
+    from dotenv import dotenv_values
+    saved = (dotenv_values(webui.ENV_PATH) if webui.ENV_PATH.exists() else {}).get("JOB_FOLDER")
+    if saved and Path(saved).expanduser().resolve() != config.JOB_FOLDER.resolve():
+        return Path(saved).expanduser()
+    return None
 
 
 def choose_native() -> str | None:

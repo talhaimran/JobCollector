@@ -26,3 +26,10 @@ def default_scoring(monkeypatch):
 def no_real_legacy_db(tmp_path, monkeypatch):
     """Folder switches write a marker next to the old database: keep that out of the real app folder."""
     monkeypatch.setattr(config, "LEGACY_DB", tmp_path / "no-legacy" / "jobs.db")
+
+
+@pytest.fixture(autouse=True)
+def no_real_env_file(tmp_path, monkeypatch):
+    """Tests never read or write the real .env (it names the real data folder and holds the Gmail password)."""
+    from collector import webui
+    monkeypatch.setattr(webui, "ENV_PATH", tmp_path / "no-env" / ".env")

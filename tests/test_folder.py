@@ -256,3 +256,50 @@ def test_copy_db_closes_both_connections(tmp_path, monkeypatch):
     monkeypatch.setattr(folder.sqlite3, "connect", Tracked)
     folder._copy_db(src, tmp_path / "out" / "b.db")
     assert len(opened) == 2 and all(c.closed for c in opened)
+
+
+def test_copy_brings_the_logs_and_keeps_existing_ones(app, tmp_path):
+    folder, _ = app
+    config.LOGS_DIR.mkdir()
+    (config.LOGS_DIR / "collector.log").write_text("old run history\n")
+    (config.LOGS_DIR / "collector.err.log").write_text("old errors\n")
+    target = tmp_path / "new"
+    (target / "logs").mkdir(parents=True)
+    (target / "logs" / "collector.err.log").write_text("already here\n")
+    folder.switch(str(target), "copy")
+    assert (target / "logs" / "collector.log").read_text() == "old run history\n"
+    assert (target / "logs" / "collector.err.log").read_text() == "already here\n"  # never overwritten
+
+
+def test_interrupted_db_copy_leaves_no_half_database(tmp_path, monkeypatch):
+    import sqlite3
+    from collector import folder
+    src = tmp_path / "a.db"
+    sqlite3.connect(src).close()
+    dst = tmp_path / "out" / "jobs.db"
+
+    def boom(self, *a, **k):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(folder, "_backup", boom)
+    with pytest.raises(sqlite3.OperationalError):
+        folder._copy_db(src, dst)
+    assert list(dst.parent.iterdir()) == []  # another process never sees a half-copied jobs.db
+
+
+def test_run_started_before_a_switch_skips_instead_of_using_the_old_folder(app, tmp_path, monkeypatch, caplog):
+    import argparse
+    import logging
+    from collector import cli, pipeline
+    folder, env = app
+    ran = []
+    monkeypatch.setattr(pipeline, "run", lambda **k: ran.append(config.JOB_FOLDER))
+    loaded = config.JOB_FOLDER  # this process loaded its settings, then got delayed...
+    folder.switch(str(tmp_path / "new"), "copy")  # ...while the page switched folders
+    config.use_folder(loaded)
+    caplog.set_level(logging.INFO)
+    cli.cmd_run(argparse.Namespace(dry_run=True))
+    assert ran == [] and "data folder changed" in caplog.text
+    config.use_folder(tmp_path / "new")
+    cli.cmd_run(argparse.Namespace(dry_run=True))  # the next check uses the new folder
+    assert ran == [tmp_path / "new"]
