@@ -36,3 +36,10 @@ def test_mac_launcher_explains_a_read_only_folder(tmp_path):
 
 def test_windows_launcher_checks_the_folder_is_writable():
     assert "can't save files in this folder" in WIN.read_text()
+
+
+def test_windows_write_check_cannot_touch_an_existing_file():
+    # it must create something new (mkdir fails rather than overwrite), never redirect into a file
+    text = WIN.read_text()
+    assert "type nul >" not in text and 'del "' not in text
+    assert 'mkdir "%PROBE%"' in text and 'rmdir "%PROBE%"' in text and "%RANDOM%" in text
