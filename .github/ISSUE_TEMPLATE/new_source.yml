@@ -1,0 +1,32 @@
+name: New job source
+description: Suggest a job board or applicant tracking system to collect from
+labels: [new source]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: Source
+      placeholder: "Workday, SmartRecruiters, a country's job board..."
+    validations:
+      required: true
+  - type: textarea
+    id: access
+    attributes:
+      label: How can it be read?
+      description: A public JSON feed or API, or public HTML pages. Link an example URL.
+    validations:
+      required: true
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Ground rules
+      options:
+        - label: It can be read without logging in
+          required: true
+        - label: It doesn't need a CAPTCHA or a block bypass
+          required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it's worth adding
+      description: Which jobs or regions it covers that the current sources miss.
