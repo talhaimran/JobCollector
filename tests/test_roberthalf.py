@@ -87,6 +87,19 @@ def test_fetch_pages_until_old_jobs(conn, s):
     assert len(jobs) == 27 and all(j["description"] for j in jobs)
 
 
+def test_undated_job_is_kept_and_does_not_stop_paging(conn, s):
+    site = FakeSite()
+    real = site.__call__
+    def first_page_undated(url, **kw):
+        r = real(url, **kw)
+        if url.endswith("project-manager"):
+            r.text = page([job(0, date_posted="")] + [job(i) for i in range(1, 25)], 60)
+        return r
+    jobs = roberthalf.fetch(conn, s, get=first_page_undated, sleep=lambda x: None, now=NOW)
+    assert len(site.calls) == 2  # page 2 still fetched
+    assert "rh-000-caen" in {j["source_job_id"] for j in jobs} and len(jobs) == 27
+
+
 def test_known_jobs_skipped_and_errors_recorded(conn, s):
     pipeline.process(conn, s, roberthalf.fetch(conn, s, get=FakeSite(), sleep=lambda x: None, now=NOW), run_id=None)
     assert roberthalf.fetch(conn, s, get=FakeSite(), sleep=lambda x: None, now=NOW) == []

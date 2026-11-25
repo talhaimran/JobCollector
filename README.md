@@ -179,7 +179,7 @@ In the `runs` table, LinkedIn's count is new jobs only (known ones are dropped b
 randstad.ca's search pages carry their results as JSON, 30 per page. Its robots.txt allows the plain keyword search but not the radius, sort or date filters, so each run:
 
 - searches **Canada-wide once per search title** (`/jobs/q-project-manager/`), paging by relevance up to 5 pages (`RANDSTAD_MAX_PAGES`), 3–8 s between requests;
-- keeps jobs created in the last day; Accepted cities and Remote in do the location filtering;
+- keeps jobs dated today or yesterday (postings have a date but no time) and undated ones; Accepted cities and Remote in do the location filtering;
 - fetches the job page for the full description, only for new jobs that pass the filters. The search results give just its first few lines.
 
 Any HTTP error (403, 429) ends Randstad for that run and is recorded in the `runs` table. The next run tries again. Most postings are Randstad's own, so the company shows as "Randstad Canada".
@@ -188,7 +188,7 @@ Any HTTP error (403, 429) ends Randstad for that run and is recorded in the `run
 
 `roberthalf.com/ca/en/jobs/all/<title>` is a keyword search across Canada, newest first, 25 per page. The page carries the results as JSON with everything needed: full description, remote/hybrid/on-site, pay and posting date. So each run:
 
-- searches **once per search title**, usually a single request, paging (`?pagenumber=2`, up to 4 pages) only until it reaches jobs older than a day;
+- searches **once per search title**, usually a single request, paging (`?pagenumber=2`, up to 4 pages) only until it reaches a job dated before yesterday (undated jobs are kept and don't stop the paging);
 - fetches no job pages;
 - reads the work model from Robert Half's own remote/hybrid/on-site field, and "Contract to Permanent" counts as both contract and full-time.
 

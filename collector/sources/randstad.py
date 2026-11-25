@@ -76,7 +76,8 @@ def fetch(conn, s, get=None, sleep=time.sleep, now=None) -> list[dict]:
     """New recent jobs for every search title. Raises on HTTP errors; jobs found before an error are lost
     for this run only (they're still recent next run)."""
     now = now or datetime.now(timezone.utc)
-    since = (now - timedelta(hours=config.HOURS_OLD)).date().isoformat()  # dates only, so up to a day of overlap
+    # whole days: postings carry a date, not a time, so a job from early yesterday still counts (known jobs are skipped)
+    since = (now - timedelta(hours=config.HOURS_OLD)).date().isoformat()
     client, jobs, known = PoliteClient(config.RANDSTAD_DELAY_SECONDS, get, sleep), [], set()
     for title in search_titles(s.target_titles):
         for page in range(config.RANDSTAD_MAX_PAGES):
@@ -84,7 +85,7 @@ def fetch(conn, s, get=None, sleep=time.sleep, now=None) -> list[dict]:
             raw, total = parse_search(client.get(url).text)
             for src in raw:
                 j = to_job(src)
-                if (j["posted_at"] or "") < since or j["source_job_id"] in known \
+                if (j["posted_at"] and j["posted_at"] < since) or j["source_job_id"] in known \
                         or db.seen(conn, j["source"], j["source_job_id"], j["url"]):
                     continue
                 known.add(j["source_job_id"])

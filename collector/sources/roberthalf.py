@@ -3,7 +3,7 @@
 /ca/en/jobs/all/<title> is a server-side keyword search across Canada, newest first, 25 per page
 (?pagenumber=2 ...). The page embeds its results as a JSON string (aemSettings.rh_job_search.initialResults)
 with everything we need: full description, remote/hybrid/on-site, pay and posting date, so no job pages.
-Each run searches once per title and stops paging at the first job older than HOURS_OLD.
+Each run searches once per title and stops paging at the first job dated before the cutoff day.
 """
 import json
 import logging
@@ -64,7 +64,8 @@ def to_job(r: dict) -> dict:
 def fetch(conn, s, get=None, sleep=time.sleep, now=None) -> list[dict]:
     """New recent jobs for every search title. Raises on HTTP errors (the pipeline records them)."""
     now = now or datetime.now(timezone.utc)
-    since = (now - timedelta(hours=config.HOURS_OLD)).date().isoformat()  # dates only, so up to a day of overlap
+    # whole days: postings carry a date, not a time, so a job from early yesterday still counts (known jobs are skipped)
+    since = (now - timedelta(hours=config.HOURS_OLD)).date().isoformat()
     client, jobs, known = PoliteClient(config.RANDSTAD_DELAY_SECONDS, get, sleep), [], set()
     for title in search_titles(s.target_titles):
         for page in range(config.ROBERTHALF_MAX_PAGES):
@@ -72,9 +73,9 @@ def fetch(conn, s, get=None, sleep=time.sleep, now=None) -> list[dict]:
             old = False
             for r in raw:
                 j = to_job(r)
-                if (j["posted_at"] or "") < since:
+                if j["posted_at"] and j["posted_at"] < since:
                     old = True  # newest first: the rest of the pages are older still
-                    continue
+                    continue  # an undated job is kept and proves nothing about the rest
                 if j["source_job_id"] in known or db.seen(conn, j["source"], j["source_job_id"], j["url"]):
                     continue
                 known.add(j["source_job_id"])
