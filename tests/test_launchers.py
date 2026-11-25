@@ -15,3 +15,24 @@ def test_launchers_exist_and_parse():
         text = f.read_text()
         assert "-m collector ui" in text and "requirements.sha" in text and "python.org/downloads" in text
     assert b"\r\n" in WIN.read_bytes()  # cmd.exe misreads LF-only batch files
+
+
+def test_mac_launcher_explains_a_read_only_folder(tmp_path):
+    folder = tmp_path / "locked"
+    folder.mkdir()
+    launcher = folder / MAC.name
+    launcher.write_bytes(MAC.read_bytes())
+    (folder / "requirements.txt").write_text("")
+    folder.chmod(0o555)
+    try:
+        r = subprocess.run(["bash", str(launcher)], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=30)
+    finally:
+        folder.chmod(0o755)
+    assert r.returncode == 1
+    assert "can't save files in this folder" in r.stdout
+    assert not (folder / ".venv").exists()
+
+
+def test_windows_launcher_checks_the_folder_is_writable():
+    assert "can't save files in this folder" in WIN.read_text()

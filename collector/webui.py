@@ -297,6 +297,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
 
+def _is_job_collector(url: str) -> bool:
+    """True if the server at url is ours: every reply carries our Server header."""
+    import urllib.error
+    import urllib.request
+    try:
+        resp = urllib.request.urlopen(url, timeout=3)
+    except urllib.error.HTTPError as e:
+        resp = e
+    except OSError:
+        return False
+    return (resp.headers.get("Server") or "").startswith(Handler.server_version + " ")
+
+
 def serve(port: int = 8765, open_browser: bool = True):
     url = f"http://127.0.0.1:{port}/"
     try:
@@ -304,6 +317,10 @@ def serve(port: int = 8765, open_browser: bool = True):
     except OSError as e:
         if e.errno not in (errno.EADDRINUSE, 10048):  # 10048: Windows' "address in use"
             raise
+        if not _is_job_collector(url):
+            print(f"Port {port} is used by another program, so Job Collector can't open. "
+                  "Close that program and try again.")
+            raise SystemExit(1)
         print(f"Job Collector is already open at {url}")  # launcher double-clicked again
         import webbrowser
         webbrowser.open(url)
