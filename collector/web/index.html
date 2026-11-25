@@ -118,6 +118,34 @@ textarea { font: inherit; resize: vertical; }
 .folder-pick { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 10px; }
 .folder-pick p { margin: 0; line-height: 1.5; }
 .sub-h { font-size: 14px; font-weight: 600; margin: 8px 0 0; }
+/* setup wizard */
+.setup { max-width: 640px; width: 100%; margin: 0 auto; display: grid; gap: 16px; }
+.setup .group { padding: 24px; gap: 16px; }
+.setup h1 { font-size: 22px; text-wrap: balance; }
+.setup h1:focus { outline: none; }
+.setup p { margin: 0; line-height: 1.55; }
+.setup .btn { min-height: 44px; padding: 10px 18px; }
+.setup input[type=text], .setup input[type=email], .setup input[type=password], .setup input[type=number], .setup select { min-height: 44px; font-size: 15px; }
+.step-count { color: var(--muted); font-size: 13px; margin: 0; }
+.progress { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.progress i { display: block; height: 100%; width: 20%; background: var(--accent); }
+@media (prefers-reduced-motion: no-preference) { .progress i { transition: width .25s ease-out; } }
+.setup-nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.setup-nav .later { color: var(--muted); margin-right: auto; padding: 10px 4px; }
+.toggles { display: flex; gap: 8px; flex-wrap: wrap; }
+.toggles button { min-height: 44px; padding: 10px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; font: inherit; color: var(--fg); }
+.toggles button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+.field-err { color: var(--fail); font-size: 13px; }
+.banner { background: var(--dup-soft); color: var(--dup); border-radius: 8px; padding: 10px 12px; line-height: 1.45; }
+.help { margin: 0; padding-left: 20px; line-height: 1.6; color: var(--muted); }
+.help a { color: var(--accent); }
+.pw { display: flex; gap: 8px; } .pw input { flex: 1; min-width: 0; }
+.live { list-style: none; margin: 0; padding: 10px 12px; background: var(--bg); border-radius: 6px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; min-height: 3.2em; overflow-wrap: anywhere; }
+.result { font-size: 16px; font-weight: 500; }
+dialog { border: 1px solid var(--line); border-radius: 10px; padding: 20px; max-width: 420px; background: var(--surface); color: var(--fg); }
+dialog::backdrop { background: rgb(0 0 0 / .45); }
+dialog h2 { font-size: 17px; }
+.linklike { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 .delta.up { color: var(--pass); } .delta.down { color: var(--fail); }
 </style>
 </head>
@@ -172,9 +200,99 @@ textarea { font: inherit; resize: vertical; }
   </details>
 </main>
 
+<main class="wrap" id="view-setup" hidden>
+  <div class="setup">
+    <p class="step-count" id="su-count">Step 1 of 5</p>
+    <div class="progress" role="progressbar" aria-label="Setup progress" aria-valuemin="1" aria-valuemax="5" aria-valuenow="1"><i id="su-bar"></i></div>
+
+    <section class="group" data-step="1" hidden>
+      <h1 tabindex="-1">Welcome to Job Collector</h1>
+      <p>Every few hours it checks LinkedIn, Indeed, Glassdoor, Randstad and Robert Half for jobs that fit you, and emails you only the new ones. Setup takes about three minutes.</p>
+      <p><strong>Where should your job data live?</strong> Your settings and saved jobs go in one folder. A folder in Documents (or iCloud Drive, Dropbox, OneDrive) is easy to find and back up.</p>
+      <div><button type="button" class="btn" id="su-suggest">Use Documents/Job Collector</button></div>
+      <div id="su-folder-slot"></div>
+    </section>
+
+    <section class="group" data-step="2" hidden>
+      <h1 tabindex="-1">What job are you looking for?</h1>
+      <div class="field"><label for="su-titles">Job titles</label>
+        <input type="text" id="su-titles" aria-describedby="su-titles-hint su-titles-err" autocomplete="off">
+        <span class="hint" id="su-titles-hint">Separate several with commas, e.g. Project Manager, Scrum Master. A job matches if its title contains one of these.</span>
+        <span class="field-err" id="su-titles-err" role="alert"></span></div>
+      <div class="row2">
+        <div class="field"><label for="su-where">Near</label>
+          <input type="text" id="su-where" aria-describedby="su-where-hint" autocomplete="off">
+          <span class="hint" id="su-where-hint">City and province, e.g. Kitchener ON. Leave blank for remote jobs only.</span></div>
+        <div class="field"><label for="su-radius">Within (miles)</label>
+          <input type="number" id="su-radius" min="1" max="100" step="1" aria-describedby="su-radius-hint">
+          <span class="hint" id="su-radius-hint"></span></div>
+      </div>
+      <fieldset class="field"><legend>Work model</legend>
+        <div class="toggles" id="su-models">
+          <button type="button" aria-pressed="true" data-v="Remote">Remote</button>
+          <button type="button" aria-pressed="true" data-v="Hybrid">Hybrid</button>
+          <button type="button" aria-pressed="false" data-v="On-site">On-site</button>
+        </div>
+        <span class="field-err" id="su-models-err" role="alert"></span></fieldset>
+      <p class="hint">Salary, keywords and other filters can be added later in Settings.</p>
+    </section>
+
+    <section class="group" data-step="3" hidden>
+      <h1 tabindex="-1">Where should we email new jobs?</h1>
+      <div class="field"><label for="su-to">Send new jobs to</label>
+        <input type="email" id="su-to" autocomplete="email" aria-describedby="su-to-err"><span class="field-err" id="su-to-err" role="alert"></span></div>
+      <div class="field"><label for="su-gmail">Gmail address that sends them</label>
+        <input type="email" id="su-gmail" autocomplete="email" aria-describedby="su-gmail-hint su-gmail-err">
+        <span class="hint" id="su-gmail-hint">Usually your own Gmail. Job Collector sends from it to the address above.</span>
+        <span class="field-err" id="su-gmail-err" role="alert"></span></div>
+      <div class="field"><label for="su-pw">Gmail app password</label>
+        <div class="pw"><input type="password" id="su-pw" autocomplete="off" aria-describedby="su-pw-hint su-pw-err"><button type="button" class="btn" id="su-pw-show" aria-pressed="false">Show</button></div>
+        <span class="field-err" id="su-pw-err" role="alert"></span>
+        <ol class="help" id="su-pw-hint">
+          <li>Open <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">Google app passwords</a> (2-Step Verification must be on).</li>
+          <li>Name it "Job Collector" and click Create.</li>
+          <li>Copy the 16 letters here. It's not your normal Gmail password.</li>
+        </ol></div>
+      <div class="setup-nav"><button type="button" class="btn" id="su-test">Send test email</button><span class="status" id="su-mail-status" role="status"></span></div>
+      <p><button type="button" class="linklike" id="su-skip">Skip email for now</button></p>
+    </section>
+
+    <section class="group" data-step="4" hidden>
+      <h1 tabindex="-1">How often should it check?</h1>
+      <div class="field"><label for="su-hours">Check for new jobs every</label>
+        <select id="su-hours"><option value="1">1 hour</option><option value="2">2 hours</option><option value="3">3 hours</option><option value="4">4 hours</option><option value="6">6 hours</option><option value="12">12 hours</option></select>
+        <span class="hint">Checks run while this computer is on and awake, even when this page is closed. LinkedIn is checked at most every 4 hours.</span></div>
+      <span class="status" id="su-sched-status" role="status"></span>
+    </section>
+
+    <section class="group" data-step="5" hidden>
+      <h1 tabindex="-1">Find your first jobs</h1>
+      <p id="su-run-intro">Run the first check now to see it working. It usually takes 2–5 minutes, and you can leave this page while it runs.</p>
+      <div><button type="button" class="btn primary" id="su-run">Find jobs now</button></div>
+      <ol class="live" id="su-live" aria-live="polite" hidden></ol>
+      <p class="result" id="su-result" role="status"></p>
+      <div id="su-done" hidden><a class="btn primary" href="#audit">See jobs</a></div>
+    </section>
+
+    <div class="setup-nav">
+      <a class="later" href="#settings" id="su-later">Set up later</a>
+      <button type="button" class="btn" id="su-back">Back</button>
+      <button type="button" class="btn primary" id="su-next">Next</button>
+    </div>
+  </div>
+  <dialog id="su-skip-dialog" aria-labelledby="su-skip-title">
+    <h2 id="su-skip-title">Skip email?</h2>
+    <p>Skip email? Job Collector won't send you any updates. You'll only see new jobs when you open this page.</p>
+    <div class="setup-nav" style="justify-content:flex-end; margin-top:16px">
+      <button type="button" class="btn" id="su-skip-back">Go back</button>
+      <button type="button" class="btn primary" id="su-skip-yes">Skip email</button>
+    </div>
+  </dialog>
+</main>
+
 <main class="wrap" id="view-settings" hidden>
   <div>
-    <h1>Settings</h1>
+    <div class="setup-nav"><h1>Settings</h1><a class="btn" href="#setup/1" style="margin-left:auto">Run setup again</a></div>
     <p class="sub">Scoring values and email details are saved to <code>.env</code>. Job search settings and the email cutoff are saved to your profile (<code id="profile-path">candidate-profile.md</code>)<span id="profile-new" hidden>, which will be created when you save</span>. Changes apply from the next run; scores already saved don't change.</p>
   </div>
   <div class="settings">
@@ -245,6 +363,7 @@ textarea { font: inherit; resize: vertical; }
       </section>
 
       <section class="group" role="tabpanel" id="tab-email" aria-labelledby="t-email" hidden>
+        <p class="banner" id="email-off" hidden>Email isn't set up, so Job Collector won't send you any updates. New jobs only appear on the Jobs found page.</p>
         <p class="hint">Gmail with an app password (Google Account → Security → 2-Step Verification → App passwords).</p>
         <div class="row2">
           <div class="field"><label for="from-addr">Send from</label><input type="email" id="from-addr" autocomplete="off"></div>
@@ -262,7 +381,7 @@ textarea { font: inherit; resize: vertical; }
       </section>
 
       <section class="group" role="tabpanel" id="tab-schedule" aria-labelledby="t-schedule" hidden>
-        <fieldset class="field">
+        <fieldset class="field" id="folder-box">
           <legend>Data folder</legend>
           <span class="hint">Your job search settings, saved jobs and logs live here. A synced folder (iCloud Drive, Dropbox, OneDrive) keeps a backup. Your Gmail password stays in the app folder.</span>
           <div class="pathline"><code id="folder-now">–</code><button type="button" class="btn" id="folder-choose">Choose folder…</button></div>
@@ -325,12 +444,16 @@ const localTime = iso => { if (!iso) return "–"; if (iso.length === 10) return
 /* ---------- routing ---------- */
 let VIEW = null;
 function route() {
-  const [hash, tab] = location.hash.split("/"), v = hash === "#settings" ? "settings" : "audit";
-  $("view-audit").hidden = v !== "audit"; $("view-settings").hidden = v !== "settings";
+  const [hash, tab] = location.hash.split("/");
+  const v = hash === "#settings" ? "settings" : hash === "#setup" ? "setup" : "audit";
+  $("view-audit").hidden = v !== "audit"; $("view-settings").hidden = v !== "settings"; $("view-setup").hidden = v !== "setup";
+  if (v === "setup") { showStep(Number(tab) || 1); if (VIEW !== "setup") enterSetup(); }
+  else if (VIEW === "setup") $("tab-schedule").prepend($("folder-box"));  // give the folder box back to Settings
   $("nav-audit").setAttribute("aria-current", v === "audit" ? "page" : "false");
   $("nav-settings").setAttribute("aria-current", v === "settings" ? "page" : "false");
   if (v === "settings") showTab(tab);
-  if (v === "settings" && VIEW !== "settings") loadSettings();  // not on tab switches: that would drop unsaved edits
+  if (v === "settings" && VIEW !== "settings" && VIEW !== "setup") loadSettings();
+  else if (v === "settings" && VIEW === "setup") loadSettings();  // not on tab switches: that would drop unsaved edits
   VIEW = v;
 }
 window.addEventListener("hashchange", route);
@@ -525,6 +648,7 @@ async function loadSettings() {
   $("p-search_radius").value = P.search_radius ?? ""; $("p-search_radius").placeholder = CFG.default_radius; radiusHint();
   $("profile-new").hidden = CFG.profile_exists;
   $("folder-now").textContent = CFG.job_folder;
+  $("email-off").hidden = emailReady();
   $("kw-count").textContent = kwCount();
   updateFormula(); schedulePreview();
   TABS.forEach(t => SAVED[t] = panelState(t)); markDirty();
@@ -642,12 +766,135 @@ $("folder-actions").addEventListener("click", async e => {
   }
 });
 
+/* ---------- setup wizard ---------- */
+let STEP = 1, RUN_TIMER = null;
+const emailReady = () => !!(CFG && CFG.has_password && CFG.EMAIL_TO && CFG.EMAIL_FROM && CFG.SMTP_USER);
+async function enterSetup() {
+  $("su-folder-slot").append($("folder-box"));
+  await loadSettings();
+  if (!CFG || !CFG.profile) return;
+  const P = CFG.profile;
+  $("su-titles").value = P.target_titles; $("su-where").value = P.search_locations || P.locations;
+  $("su-radius").value = P.search_radius ?? CFG.default_radius; suRadiusHint();
+  if (P.work_model) $("su-models").querySelectorAll("button").forEach(b =>
+    b.setAttribute("aria-pressed", String(P.work_model.toLowerCase().includes(b.dataset.v.toLowerCase()))));
+  $("su-to").value = CFG.EMAIL_TO; $("su-gmail").value = CFG.SMTP_USER || CFG.EMAIL_FROM;
+  $("su-pw").placeholder = CFG.has_password ? "saved (leave blank to keep it)" : "";
+  $("su-hours").value = String(CFG.SCHEDULE_HOURS || 2);
+  if (!$("su-hours").value) $("su-hours").value = "2";
+  $("su-suggest").textContent = `Use ${CFG.suggested_folder.split(/[\\/]/).slice(-2).join("/")}`;
+}
+function showStep(n) {
+  STEP = Math.min(5, Math.max(1, n));
+  document.querySelectorAll("[data-step]").forEach(sec => sec.hidden = Number(sec.dataset.step) !== STEP);
+  $("su-count").textContent = `Step ${STEP} of 5`;
+  $("su-bar").style.width = `${STEP * 20}%`;
+  document.querySelector(".progress").setAttribute("aria-valuenow", STEP);
+  $("su-back").hidden = STEP === 1;
+  $("su-next").hidden = STEP === 5;
+  $("su-next").textContent = STEP === 4 ? "Save and continue" : "Next";
+  document.querySelector(`[data-step="${STEP}"] h1`).focus();
+}
+const goStep = n => { location.hash = "#setup/" + n; };
+$("su-back").addEventListener("click", () => goStep(STEP - 1));
+function fieldErr(id, msg) { $(id + "-err").textContent = msg || ""; $(id).setAttribute("aria-invalid", msg ? "true" : "false"); return !msg; }
+async function saving(fn) {
+  $("su-next").disabled = true; const label = $("su-next").textContent; $("su-next").textContent = "Saving…";
+  try { return await fn(); } finally { $("su-next").disabled = false; $("su-next").textContent = label; }
+}
+$("su-next").addEventListener("click", async () => {
+  try {
+    if (STEP === 2 && !(await saveJob())) return;
+    if (STEP === 3) { const ok = await saveEmail(true); if (ok === "skip") return $("su-skip-dialog").showModal(); if (!ok) return; }
+    if (STEP === 4) await saving(async () => {
+      const r = await api("/api/config", {SCHEDULE_PLATFORM: CFG.SCHEDULE_PLATFORM, SCHEDULE_HOURS: Number($("su-hours").value)});
+      $("su-sched-status").textContent = r.schedule_message || ""; CFG = r;
+    });
+    goStep(STEP + 1);
+  } catch (e) { status(e.message, false); $("su-mail-status").textContent = e.message; $("su-mail-status").className = "status bad"; }
+});
+$("su-suggest").addEventListener("click", () => pickFolder(CFG.suggested_folder));
+$("su-models").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+});
+function suRadiusHint() {
+  const mi = Number($("su-radius").value || CFG?.default_radius || 25);
+  $("su-radius-hint").textContent = `${mi} miles ≈ ${Math.round(mi * 1.609)} km`;
+}
+$("su-radius").addEventListener("input", suRadiusHint);
+async function saveJob() {
+  const titles = $("su-titles").value.trim();
+  const models = [...$("su-models").querySelectorAll('[aria-pressed="true"]')].map(b => b.dataset.v);
+  const ok = fieldErr("su-titles", titles ? "" : "Add at least one job title.") &
+             fieldErr("su-models", models.length ? "" : "Pick at least one.");
+  if (!ok) { (titles ? $("su-models").querySelector("button") : $("su-titles")).focus(); return false; }
+  const where = $("su-where").value.trim();
+  // the place searched is also the place accepted; more cities can be added in Settings → Filters
+  return saving(async () => { CFG = await api("/api/config", {profile: {target_titles: titles, search_locations: where,
+    locations: where, search_radius: $("su-radius").value, work_model: models.join(", ")}}); return true; });
+}
+async function saveEmail(forNext) {
+  const to = $("su-to").value.trim(), gmail = $("su-gmail").value.trim(), pw = $("su-pw").value.trim();
+  if (forNext && !to && !gmail && !pw && !CFG.has_password) return "skip";
+  const bad = el => el.value.trim() && !el.checkValidity();
+  const ok = fieldErr("su-to", !to ? "Add the address to send jobs to." : bad($("su-to")) ? "That doesn't look like an email address." : "") &
+             fieldErr("su-gmail", !gmail ? "Add your Gmail address." : bad($("su-gmail")) ? "That doesn't look like an email address." : "") &
+             fieldErr("su-pw", pw || CFG.has_password ? "" : "Add the 16-letter app password from Google.");
+  if (!ok) { document.querySelector('.setup [aria-invalid="true"]').focus(); return false; }
+  return saving(async () => {
+    CFG = await api("/api/config", {EMAIL_TO: to, EMAIL_FROM: gmail, SMTP_USER: gmail, SMTP_APP_PASSWORD: pw});
+    $("su-pw").value = ""; $("su-pw").placeholder = "saved (leave blank to keep it)"; return true;
+  });
+}
+$("su-pw-show").addEventListener("click", () => {
+  const show = $("su-pw").type === "password";
+  $("su-pw").type = show ? "text" : "password"; $("su-pw-show").textContent = show ? "Hide" : "Show";
+  $("su-pw-show").setAttribute("aria-pressed", String(show));
+});
+$("su-test").addEventListener("click", async () => {
+  const st = $("su-mail-status"); $("su-test").disabled = true;
+  try {
+    if (await saveEmail(false) !== true) return;
+    st.textContent = "Sending…"; st.className = "status ok";
+    await api("/api/test-email", {});
+    st.textContent = `Sent. Check ${CFG.EMAIL_TO}'s inbox.`;
+  } catch (e) { st.textContent = e.message; st.className = "status bad"; }
+  finally { $("su-test").disabled = false; }
+});
+$("su-skip").addEventListener("click", () => $("su-skip-dialog").showModal());
+$("su-skip-back").addEventListener("click", () => $("su-skip-dialog").close());
+$("su-skip-yes").addEventListener("click", () => { $("su-skip-dialog").close(); goStep(4); });
+$("su-run").addEventListener("click", async () => {
+  $("su-run").disabled = true; $("su-result").textContent = ""; $("su-live").hidden = false;
+  $("su-live").innerHTML = "<li>Starting…</li>";
+  try { await api("/api/run", {}); } catch (e) { $("su-result").textContent = e.message; $("su-run").disabled = false; return; }
+  const t0 = Date.now();
+  clearInterval(RUN_TIMER);
+  RUN_TIMER = setInterval(async () => {
+    let st; try { st = await api("/api/run"); } catch (e) { return; }
+    const secs = Math.round((Date.now() - t0) / 1000);
+    $("su-live").innerHTML = st.lines.map(l => `<li>${esc(l)}</li>`).join("") || "<li>Searching…</li>";
+    if (st.running) { $("su-run").textContent = `Searching… ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`; return; }
+    clearInterval(RUN_TIMER);
+    $("su-run").textContent = "Find jobs again"; $("su-run").disabled = false;
+    const r = st.run || {};
+    $("su-result").textContent = `Done: ${r.new_jobs ?? 0} new jobs found, ${r.passed_filters ?? 0} match your settings` +
+      (r.emailed ? `, ${r.emailed} emailed to you.` : ".");
+    $("su-done").hidden = false; $("su-run").classList.remove("primary");
+    loadJobs(); loadRuns();
+  }, 2000);
+});
+
 /* ---------- boot ---------- */
 let preset = "7";
 try { preset = localStorage.getItem("preset") ?? "7"; } catch (e) {}
 setPreset(preset);
 loadRuns();
 route();
+api("/api/config").then(c => {  // first launch: no profile yet → guided setup
+  if (!c.profile_exists && !location.hash.startsWith("#setup")) location.hash = "#setup/1";
+}).catch(() => {});
 </script>
 </body>
 </html>

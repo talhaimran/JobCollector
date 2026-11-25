@@ -81,6 +81,7 @@ def read_config() -> dict:
     out["profile"]["search_radius"] = s.search_radius
     out["default_radius"] = settings.DEFAULT_RADIUS_MILES
     out["job_folder"] = str(config.JOB_FOLDER)
+    out["suggested_folder"] = str(Path.home() / "Documents" / "Job Collector")
     out["profile_path"] = str(config.PROFILE_PATH)
     out["profile_exists"] = config.PROFILE_PATH.exists()
     return out
@@ -238,7 +239,7 @@ class Busy(Exception):
     pass
 
 
-RUN = {"proc": None, "offset": 0}  # the check started from this page, and where its log lines begin
+RUN = {"proc": None, "offset": 0, "watching": False}  # the check this page started or joined; where its log lines begin
 _LOG_LINE = re.compile(r"^\S+ \S+ \w+ [\w.]+: ")  # "2026-11-25 10:00:01,000 INFO collector.x: "
 
 
@@ -246,24 +247,37 @@ def _log_path():
     return config.LOGS_DIR / "collector.log"
 
 
-def start_run():
+def _lock_held() -> bool:
+    # shortcut: probing takes the lock for an instant; a scheduled run starting in that instant skips one turn
+    with db.run_lock(config.LOCK_PATH) as got:
+        return not got
+
+
+def start_run() -> bool:
+    """Starts a check, or follows the one already running (e.g. saving the schedule just started one).
+    Returns True if this started it."""
     if RUN["proc"] is not None and RUN["proc"].poll() is None:
         raise Busy("A check is already running.")
-    with db.run_lock(config.LOCK_PATH) as got:  # a scheduled check may be running
-        if not got:
-            raise Busy("A check is already running.")
     RUN["offset"] = _log_path().stat().st_size if _log_path().exists() else 0
+    RUN["watching"] = True
+    if _lock_held():
+        RUN["proc"] = None
+        return False
     RUN["proc"] = subprocess.Popen([sys.executable, "-m", "collector", "run"], cwd=config.ROOT,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def run_status(conn) -> dict:
-    running = RUN["proc"] is not None and RUN["proc"].poll() is None
+    running = (RUN["proc"] is not None and RUN["proc"].poll() is None) or (RUN["watching"] and _lock_held())
     lines = []
-    if RUN["proc"] is not None and _log_path().exists():
+    if RUN["watching"] and _log_path().exists():
         with _log_path().open("rb") as f:
             f.seek(RUN["offset"])
-            lines = [_LOG_LINE.sub("", l) for l in f.read().decode("utf-8", "replace").splitlines() if l.strip()]
+            text = f.read().decode("utf-8", "replace")
+        # one line per log entry, for people: skip multi-line blocks (the settings summary), their "...:" headers
+        # and raw data dumps like "Run 1 done: {...}"
+        lines = [m for m in (_LOG_LINE.sub("", l) for l in text.splitlines() if _LOG_LINE.match(l))
+                 if not m.endswith(":") and "{'" not in m]
     last = db.last_runs(conn, 1)
     return {"running": running, "lines": lines[-8:], "run": dict(last[0]) if last and not running else None}
 
@@ -337,8 +351,7 @@ class Handler(BaseHTTPRequestHandler):
                 msg = save_config(body)
                 return self._send(200, {**read_config(), "schedule_message": msg})
             if u.path == "/api/run":
-                start_run()
-                return self._send(200, {"started": True})
+                return self._send(200, {"started": start_run()})
             if u.path == "/api/folder/choose":
                 return self._send(200, {"path": folder.choose_native()})
             if u.path == "/api/folder":

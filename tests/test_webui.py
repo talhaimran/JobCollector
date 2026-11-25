@@ -242,7 +242,9 @@ def test_run_now_starts_once_and_streams_new_log_lines(server, tmp_path, monkeyp
         assert call(server + "/api/run", {}) == (409, {"error": "A check is already running."})
 
         with log.open("a") as f:
+            f.write("2026-11-25 10:00:00,500 INFO collector.pipeline: Settings:\n  target titles  Project Manager\n")
             f.write("2026-11-25 10:00:01,000 INFO collector.sources.randstad: randstad: 4 requests, 2 new jobs\n")
+            f.write("2026-11-25 10:00:02,000 INFO collector.pipeline: Run 1 done: {'run_id': 1, 'found': 13}\n")
         code, st = call(server + "/api/run")
         assert code == 200 and st["running"] is True
         assert st["lines"] == ["randstad: 4 requests, 2 new jobs"]  # not the older run, no timestamps
@@ -250,7 +252,7 @@ def test_run_now_starts_once_and_streams_new_log_lines(server, tmp_path, monkeyp
         webui.RUN["proc"].code = 0
         assert call(server + "/api/run")[1]["running"] is False
     finally:
-        webui.RUN["proc"] = None
+        webui.RUN.update(proc=None, offset=0, watching=False)
         config.use_folder(config.JOB_FOLDER_DEFAULT)
 
 
@@ -262,3 +264,35 @@ def test_page_uses_plain_labels():
         assert label in page, label
     for old in ("Dealbreaker keywords", "Filter audit", ">Audit<", "Email cutoff</label>", "Must-have keywords</label>"):
         assert old not in page, old
+
+
+def test_config_suggests_documents_folder():
+    from pathlib import Path
+    assert webui.read_config()["suggested_folder"] == str(Path.home() / "Documents" / "Job Collector")
+
+
+def test_run_now_joins_a_check_already_running(server, tmp_path):
+    config.use_folder(tmp_path / "f")
+    try:
+        log = config.LOGS_DIR / "collector.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("2026-11-25 09:00:00,000 INFO collector.pipeline: before\n")
+        with db.run_lock(config.LOCK_PATH) as got:  # e.g. the schedule just started one
+            assert got
+            assert call(server + "/api/run", {}) == (200, {"started": False})
+            with log.open("a") as f:
+                f.write("2026-11-25 09:00:05,000 INFO collector.sources.linkedin: linkedin: 3 new jobs\n")
+            st = call(server + "/api/run")[1]
+            assert st["running"] is True and st["lines"] == ["linkedin: 3 new jobs"]
+        assert call(server + "/api/run")[1]["running"] is False
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_setup_wizard_markup():
+    page = webui.PAGE.read_text()
+    assert 'id="view-setup"' in page and page.count('<section class="group" data-step="') == 5
+    assert ("Skip email? Job Collector won't send you any updates. "
+            "You'll only see new jobs when you open this page.") in page
+    assert "Run setup again" in page

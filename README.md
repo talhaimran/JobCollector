@@ -77,7 +77,14 @@ No terminal needed.
    - **Windows:** `Start Job Collector.bat`. If SmartScreen appears, click **More info → Run anyway**.
 
    It checks for Python 3.10 or newer (and opens the download page if it's missing), installs what it needs the first time (a few minutes), then opens the settings page in your browser. Keep the small window open while you use the page; scheduled checks keep running after you close it.
-3. **Fill in the settings page:** the jobs you want (Search and Filters), your Gmail details (Email, with a Gmail [app password](https://myaccount.google.com/apppasswords), not your normal password) and how often to check (Schedule), then **Save settings**. Saving sets up the schedule on this computer.
+3. **Follow the five setup screens** that open the first time:
+   1. where your job data lives (a folder in Documents is suggested);
+   2. the job titles you want, where, and remote / hybrid / on-site;
+   3. your Gmail details, with a Gmail [app password](https://myaccount.google.com/apppasswords) (not your normal password) and a *Send test email* button. You can skip email, but then Job Collector won't send you any updates: new jobs only show on the page;
+   4. how often to check (every 2 hours by default). This sets up the schedule on your computer;
+   5. **Find jobs now** runs the first check while you watch.
+
+   Everything can be changed later under **Settings** (and **Run setup again** is there too).
 
 To open the page again later, double-click the launcher again.
 
