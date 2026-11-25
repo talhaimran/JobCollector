@@ -124,13 +124,13 @@ textarea { font: inherit; resize: vertical; }
 <body>
 <header class="top"><div class="in">
   <span class="brand">Job Collector</span>
-  <nav><a href="#audit" id="nav-audit">Audit</a><a href="#settings" id="nav-settings">Settings</a></nav>
+  <nav><a href="#audit" id="nav-audit">Jobs found</a><a href="#settings" id="nav-settings">Settings</a></nav>
 </div></header>
 
 <main class="wrap" id="view-audit">
   <div>
-    <h1>Filter audit</h1>
-    <p class="sub">Every job the collector saved, with the first filter each one failed. Pick a date range, then click a reason to see only those jobs. Click "description" to check a keyword or dealbreaker match yourself.</p>
+    <h1>Jobs found</h1>
+    <p class="sub">Every job the collector saved, with the first filter each one failed. Pick a date range, then click a reason to see only those jobs. Click "description" to read the text the keyword checks saw.</p>
   </div>
   <div class="controls">
     <select id="field" aria-label="Which date to filter on">
@@ -182,14 +182,14 @@ textarea { font: inherit; resize: vertical; }
       <div class="tabs" role="tablist" aria-label="Settings sections">
         <button type="button" role="tab" id="t-search" data-tab="search" aria-controls="tab-search" aria-selected="false" tabindex="-1">Search<span class="dot" hidden> •</span></button>
         <button type="button" role="tab" id="t-filters" data-tab="filters" aria-controls="tab-filters" aria-selected="false" tabindex="-1">Filters<span class="dot" hidden> •</span></button>
-        <button type="button" role="tab" id="t-scoring" data-tab="scoring" aria-controls="tab-scoring" aria-selected="false" tabindex="-1">Scoring<span class="dot" hidden> •</span></button>
+        <button type="button" role="tab" id="t-scoring" data-tab="scoring" aria-controls="tab-scoring" aria-selected="false" tabindex="-1">Match score<span class="dot" hidden> •</span></button>
         <button type="button" role="tab" id="t-email" data-tab="email" aria-controls="tab-email" aria-selected="false" tabindex="-1">Email<span class="dot" hidden> •</span></button>
         <button type="button" role="tab" id="t-schedule" data-tab="schedule" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">This computer<span class="dot" hidden> •</span></button>
       </div>
       <section class="group" role="tabpanel" id="tab-search" aria-labelledby="t-search" hidden>
         <p class="hint">What the job boards are asked for. Lists are comma-separated.</p>
-        <div class="field"><label for="p-target_titles">Target titles</label><textarea id="p-target_titles" rows="2" data-profile></textarea><span class="hint">The title must contain one of these.</span></div>
-        <div class="field"><label for="p-exclude_titles">Exclude titles</label><textarea id="p-exclude_titles" rows="2" data-profile></textarea><span class="hint">Rejected if the title contains any of these.</span></div>
+        <div class="field"><label for="p-target_titles">Job titles to look for</label><textarea id="p-target_titles" rows="2" data-profile></textarea><span class="hint">The title must contain one of these.</span></div>
+        <div class="field"><label for="p-exclude_titles">Skip titles containing</label><textarea id="p-exclude_titles" rows="2" data-profile></textarea><span class="hint">Rejected if the title contains any of these.</span></div>
         <div class="row2">
           <div class="field"><label for="p-search_locations">Search locations</label><input type="text" id="p-search_locations" data-profile><span class="hint">Where the job boards look, each with the radius, e.g. Kitchener ON. Blank uses the accepted cities.</span></div>
           <div class="field"><label for="p-search_radius">Search radius (miles)</label><input type="number" id="p-search_radius" min="1" max="100" step="1" data-profile><span class="hint" id="radius-hint">25 miles ≈ 40 km.</span></div>
@@ -199,19 +199,19 @@ textarea { font: inherit; resize: vertical; }
       <section class="group" role="tabpanel" id="tab-filters" aria-labelledby="t-filters" hidden>
         <p class="hint">Hard filters: a job failing any of these is rejected. A blank field switches that filter off.</p>
         <div class="field"><label for="p-locations">Accepted cities</label><input type="text" id="p-locations" data-profile><span class="hint">Hybrid and on-site jobs pass only in one of these, e.g. Kitchener ON, Waterloo ON, Cambridge ON. Saved in your profile as "Locations".</span></div>
-        <div class="field"><label for="p-remote_in">Remote in</label><input type="text" id="p-remote_in" data-profile><span class="hint">Countries where remote jobs are allowed, e.g. Canada</span></div>
+        <div class="field"><label for="p-remote_in">Remote jobs allowed in</label><input type="text" id="p-remote_in" data-profile><span class="hint">Countries where remote jobs are allowed, e.g. Canada</span></div>
         <div class="row2">
           <fieldset class="field"><legend>Work model</legend><div class="actions"><label class="check"><input type="checkbox" name="work_model" value="Remote" data-profile> Remote</label><label class="check"><input type="checkbox" name="work_model" value="Hybrid" data-profile> Hybrid</label><label class="check"><input type="checkbox" name="work_model" value="On-site" data-profile> On-site</label></div></fieldset>
           <fieldset class="field"><legend>Employment type</legend><div class="actions"><label class="check"><input type="checkbox" name="employment_type" value="Full-time" data-profile> Full-time</label><label class="check"><input type="checkbox" name="employment_type" value="Contract" data-profile> Contract</label><label class="check"><input type="checkbox" name="employment_type" value="Part-time" data-profile> Part-time</label></div></fieldset>
         </div>
         <div class="field"><label for="p-salary_floor">Salary floor (CAD/year)</label><input type="number" id="p-salary_floor" min="0" step="1000" placeholder="off" data-profile><span class="hint">Only CAD salaries are checked; jobs without a salary pass.</span></div>
-        <div class="field"><label for="p-dealbreakers">Dealbreaker keywords</label><textarea id="p-dealbreakers" rows="3" data-profile></textarea><span class="hint">Rejected if the description contains any of these phrases.</span></div>
-        <div class="field"><label for="p-excluded_companies">Excluded companies</label><input type="text" id="p-excluded_companies" data-profile></div>
+        <div class="field"><label for="p-dealbreakers">Skip jobs that mention</label><textarea id="p-dealbreakers" rows="3" data-profile></textarea><span class="hint">Rejected if the description contains any of these phrases.</span></div>
+        <div class="field"><label for="p-excluded_companies">Skip these companies</label><input type="text" id="p-excluded_companies" data-profile></div>
       </section>
 
       <section class="group" role="tabpanel" id="tab-scoring" aria-labelledby="t-scoring" hidden>
         <p class="hint">Each job that passes the filters gets a 0–100 score from keywords and title.</p>
-        <div class="field"><label for="p-must_have">Must-have keywords</label><textarea id="p-must_have" rows="3" data-profile></textarea><span class="hint">Scored, not filtered: each one found in the description adds to the keyword score.</span></div>
+        <div class="field"><label for="p-must_have">Keywords that raise the match score</label><textarea id="p-must_have" rows="3" data-profile></textarea><span class="hint">Scored, not filtered: each one found in the description adds to the keyword score.</span></div>
         <div class="field">
           <label for="w">Weight: keywords vs title</label>
           <div class="slider">
@@ -226,7 +226,7 @@ textarea { font: inherit; resize: vertical; }
             <span class="hint">You list <span id="kw-count">–</span> must-have keywords.</span>
           </div>
           <div class="field">
-            <label for="cutoff">Email cutoff</label>
+            <label for="cutoff">Lowest match score to email</label>
             <input type="number" id="cutoff" min="0" max="100" step="1" placeholder="off">
             <span class="hint">Only jobs at or above this are emailed. Blank emails every passing job.</span>
           </div>
@@ -250,7 +250,7 @@ textarea { font: inherit; resize: vertical; }
           <div class="field"><label for="from-addr">Send from</label><input type="email" id="from-addr" autocomplete="off"></div>
           <div class="field"><label for="to-addr">Send to</label><input type="email" id="to-addr" autocomplete="off"></div>
         </div>
-        <div class="field"><label for="smtp-user">Gmail login (SMTP user)</label><input type="email" id="smtp-user" autocomplete="off"></div>
+        <div class="field"><label for="smtp-user">Gmail address used to send</label><input type="email" id="smtp-user" autocomplete="off"></div>
         <div class="field">
           <label for="pw">App password</label>
           <input type="password" id="pw" autocomplete="new-password">
@@ -258,7 +258,7 @@ textarea { font: inherit; resize: vertical; }
         </div>
         <label class="check"><input type="checkbox" id="send-empty"> Send an email even when a run finds no new matches</label>
         <label class="check"><input type="checkbox" id="send-partial"> Also email jobs that pass but have no description, tagged <em>partial score</em></label>
-        <span class="hint">Without a description the score is title-only and keywords and dealbreakers aren't checked. Glassdoor never gives descriptions; LinkedIn jobs over the request budget get theirs in a later sweep.</span>
+        <span class="hint">Without a description the match score uses the title only, and "Keywords that raise the match score" and "Skip jobs that mention" aren't checked. Glassdoor never gives descriptions; LinkedIn jobs over the request budget get theirs in a later sweep.</span>
       </section>
 
       <section class="group" role="tabpanel" id="tab-schedule" aria-labelledby="t-schedule" hidden>
@@ -344,10 +344,10 @@ const group = j => {
   if (r.startsWith("excluded title")) return "Excluded title: " + r.split(": ")[1];
   if (r.startsWith("excluded company")) return "Excluded company";
   if (r.startsWith("remote restricted")) return "Remote, but limited to another country";
-  if (r.startsWith("dealbreaker")) return "Dealbreaker: " + r.split(": ")[1];
+  if (r.startsWith("dealbreaker")) return "Mentions: " + r.split(": ")[1];
   if (r.startsWith("salary below")) return "Salary below floor";
   if (r.startsWith("employment type")) return "Employment type not wanted";
-  if (r === "title not in target titles") return "Title doesn't contain a target title";
+  if (r === "title not in target titles") return "Not one of your job titles";
   if (r.startsWith("work model")) return "Work model not wanted";
   return r;
 };

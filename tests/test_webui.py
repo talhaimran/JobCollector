@@ -252,3 +252,13 @@ def test_run_now_starts_once_and_streams_new_log_lines(server, tmp_path, monkeyp
     finally:
         webui.RUN["proc"] = None
         config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_page_uses_plain_labels():
+    page = webui.PAGE.read_text()
+    for label in ("Jobs found", "Match score", "Job titles to look for", "Skip titles containing",
+                  "Remote jobs allowed in", "Skip jobs that mention", "Skip these companies",
+                  "Keywords that raise the match score", "Lowest match score to email", "Gmail address used to send"):
+        assert label in page, label
+    for old in ("Dealbreaker keywords", "Filter audit", ">Audit<", "Email cutoff</label>", "Must-have keywords</label>"):
+        assert old not in page, old
