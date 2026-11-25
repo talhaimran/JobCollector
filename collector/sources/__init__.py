@@ -1,5 +1,6 @@
-"""Shared HTTP helper for the public company feeds."""
+"""Shared HTTP helpers: retrying JSON getter for the company feeds, polite page client for the boards."""
 import logging
+import random
 import time
 
 import requests
@@ -29,3 +30,25 @@ def get_json(url: str, tries: int = 3):
         wait = 5 * 2 ** attempt
         log.warning("%s failed, retrying in %ss", url, wait)
         time.sleep(wait)
+
+
+class PoliteClient:
+    """Browser-like GETs with a random pause between requests. Any HTTP error (403/429 included) raises:
+    the source stops for this run and the next run tries again."""
+    BROWSER = {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/130.0.0.0 Safari/537.36",
+    }
+
+    def __init__(self, delay, get=None, sleep=time.sleep):
+        self._delay, self._get, self._sleep, self.used = delay, get or requests.Session().get, sleep, 0
+
+    def get(self, url):
+        if self.used:
+            self._sleep(random.uniform(*self._delay))
+        self.used += 1
+        r = self._get(url, headers=self.BROWSER, timeout=config.HTTP_TIMEOUT)
+        r.raise_for_status()
+        return r

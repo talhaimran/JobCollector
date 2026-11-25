@@ -106,5 +106,5 @@ def test_blocked_raises_and_pipeline_records_it(conn, s):
         raise requests.HTTPError("429")
     jobs, found, errors, _ = pipeline.collect(conn, s, lambda s: ([], {}, {}), lambda c: [],
                                               lambda conn, s: {"jobs": [], "refreshed": {}, "found": 0, "errors": [], "skipped": "x"},
-                                              blocked)
+                                              {"randstad": blocked})
     assert errors["randstad"] == ["randstad: HTTPError: 429"] and jobs == []

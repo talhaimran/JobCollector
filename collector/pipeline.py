@@ -5,12 +5,13 @@ import sqlite3
 from . import config, db, emailer, filters, prescore, settings as settings_mod
 from .dedupe import fingerprint
 from .normalize import now_iso
-from .sources import feeds, jobspy_src, linkedin, randstad
+from .sources import feeds, jobspy_src, linkedin, randstad, roberthalf
 
 log = logging.getLogger(__name__)
 
 
-def collect(conn, s, fetch_jobspy, fetch_feed, fetch_linkedin, fetch_randstad=lambda conn, s: []):
+def collect(conn, s, fetch_jobspy, fetch_feed, fetch_linkedin, boards=None):
+    """boards: {name: fetch(conn, s) -> jobs} for the boards with their own scraper (Randstad, Robert Half)."""
     jobs, found, errors, refreshed = [], {}, {}, {}
     if s.target_titles:
         try:
@@ -33,13 +34,14 @@ def collect(conn, s, fetch_jobspy, fetch_feed, fetch_linkedin, fetch_randstad=la
         except Exception as e:
             log.exception("JobSpy failed")
             errors["jobspy"] = [f"{type(e).__name__}: {e}"]
-        try:
-            got = fetch_randstad(conn, s)
-            jobs += got
-            found["randstad"] = len(got)
-        except Exception as e:
-            log.warning("randstad failed: %s", e)
-            errors["randstad"] = [f"randstad: {type(e).__name__}: {str(e)[:200]}"]
+        for name, fetch in (boards or {}).items():
+            try:
+                got = fetch(conn, s)
+                jobs += got
+                found[name] = len(got)
+            except Exception as e:
+                log.warning("%s failed: %s", name, e)
+                errors[name] = [f"{name}: {type(e).__name__}: {str(e)[:200]}"]
     for c in s.target_companies:
         key = f"{c.system}:{c.board}"
         try:
@@ -112,9 +114,9 @@ def refresh(conn, s, refreshed: dict) -> list[dict]:
 
 
 def run(dry_run=False, s=None, conn=None, fetch_jobspy=jobspy_src.fetch, fetch_feed=feeds.fetch,
-        send=emailer.send, out=print, fetch_linkedin=None, fetch_randstad=None) -> dict:
+        send=emailer.send, out=print, fetch_linkedin=None, boards=None) -> dict:
     fetch_linkedin = fetch_linkedin or linkedin.sweep
-    fetch_randstad = fetch_randstad or randstad.fetch
+    boards = boards or {"randstad": randstad.fetch, "roberthalf": roberthalf.fetch}
     s = s or settings_mod.load(config.PROFILE_PATH)
     log.info("Job Search Settings:\n%s", settings_mod.describe(s))
     conn = conn or db.connect(config.DB_PATH)
@@ -122,7 +124,7 @@ def run(dry_run=False, s=None, conn=None, fetch_jobspy=jobspy_src.fetch, fetch_f
     run_id = db.start_run(conn, now_iso(), filters_off)
     log.info("Run %d started%s", run_id, " (dry run)" if dry_run else "")
 
-    jobs, found, errors, refreshed = collect(conn, s, fetch_jobspy, fetch_feed, fetch_linkedin, fetch_randstad)
+    jobs, found, errors, refreshed = collect(conn, s, fetch_jobspy, fetch_feed, fetch_linkedin, boards)
     new, passed, to_email = process(conn, s, jobs, run_id)
     to_email = sorted(to_email + refresh(conn, s, refreshed), key=lambda r: r["prescore_total"], reverse=True)
     stats = {"found": len(jobs), "new": new, "passed": passed}

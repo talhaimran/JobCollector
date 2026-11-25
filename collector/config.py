@@ -46,9 +46,10 @@ LINKEDIN_MAX_PAGES = 5           # 10 jobs per page
 LINKEDIN_DELAY_SECONDS = (5, 12)
 LINKEDIN_DESCRIPTION_TRIES = 3   # give up on a job page after this many failed sweeps
 
-# --- Randstad Canada (sources/randstad.py) ----------------------------------
+# --- Randstad Canada and Robert Half (sources/randstad.py, roberthalf.py) -----
 RANDSTAD_MAX_PAGES = 5           # 30 jobs per page; results come by relevance, not date
 RANDSTAD_DELAY_SECONDS = (3, 8)
+ROBERTHALF_MAX_PAGES = 4         # 25 jobs per page, newest first
 
 # --- Company feeds --------------------------------------------------------
 FEED_MAX_AGE_HOURS = 24
