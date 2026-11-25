@@ -239,7 +239,7 @@ class Busy(Exception):
     pass
 
 
-RUN = {"proc": None, "offset": 0, "watching": False}  # the check this page started or joined; where its log lines begin
+RUN = {"proc": None, "offset": 0, "watching": False, "after_id": 0}  # the check this page started or joined; where its log lines begin
 _LOG_LINE = re.compile(r"^\S+ \S+ \w+ [\w.]+: ")  # "2026-11-25 10:00:01,000 INFO collector.x: "
 
 
@@ -260,11 +260,22 @@ def start_run() -> bool:
         raise Busy("A check is already running.")
     RUN["offset"] = _log_path().stat().st_size if _log_path().exists() else 0
     RUN["watching"] = True
+    last = db.last_runs(db.connect(config.DB_PATH), 1)
+    RUN["after_id"] = last[0]["id"] if last else 0  # only a run newer than this is "the" result
     if _lock_held():
         RUN["proc"] = None
         return False
-    RUN["proc"] = subprocess.Popen([sys.executable, "-m", "collector", "run"], cwd=config.ROOT,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # the child must see the settings saved since this page started (load_dotenv never overrides os.environ)
+    env = {**os.environ, **{k: v for k, v in dotenv_values(ENV_PATH).items() if v is not None},
+           "JOB_FOLDER": str(config.JOB_FOLDER)}
+    _log_path().parent.mkdir(parents=True, exist_ok=True)
+    with _log_path().open("a", encoding="utf-8") as err:  # a crash before logging starts still leaves a trace
+        RUN["proc"] = subprocess.Popen(
+            [sys.executable, "-m", "collector", "run"], cwd=config.ROOT, env=env,
+            stdout=subprocess.DEVNULL, stderr=err,
+            # its own process group: closing the launcher window doesn't kill the check
+            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}))
+    return True
 
 
 def run_status(conn) -> dict:
@@ -279,7 +290,8 @@ def run_status(conn) -> dict:
         lines = [m for m in (_LOG_LINE.sub("", l) for l in text.splitlines() if _LOG_LINE.match(l))
                  if not m.endswith(":") and "{'" not in m]
     last = db.last_runs(conn, 1)
-    return {"running": running, "lines": lines[-8:], "run": dict(last[0]) if last and not running else None}
+    mine = last and last[0]["id"] > RUN["after_id"] and last[0]["finished_at"]
+    return {"running": running, "lines": lines[-8:], "run": dict(last[0]) if mine and not running else None}
 
 
 # --- HTTP ---------------------------------------------------------------------

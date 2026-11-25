@@ -296,3 +296,30 @@ def test_setup_wizard_markup():
     assert ("Skip email? Job Collector won't send you any updates. "
             "You'll only see new jobs when you open this page.") in page
     assert "Run setup again" in page
+
+
+def test_run_now_child_gets_current_settings_and_only_its_own_run(server, tmp_path, monkeypatch):
+    import subprocess
+    config.use_folder(tmp_path / "now here")
+    try:
+        (tmp_path / ".env").write_text("EMAIL_TO=new@x.co\nJOB_FOLDER=/stale\n")
+        monkeypatch.setenv("EMAIL_TO", "old@x.co")  # what the UI process loaded at startup
+        conn = db.connect(config.DB_PATH)
+        db.start_run(conn, "2026-11-01T00:00:00+00:00", "[]")  # an earlier run
+        conn.commit()
+        seen = {}
+        class Proc:
+            def poll(self):
+                return 1  # crashed before writing a run row
+        def popen(cmd, **kw):
+            seen.update(kw)
+            return Proc()
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        assert call(server + "/api/run", {}) == (200, {"started": True})
+        assert seen["env"]["EMAIL_TO"] == "new@x.co" and seen["env"]["JOB_FOLDER"] == str(config.JOB_FOLDER)
+        assert seen.get("start_new_session") or seen.get("creationflags")  # survives closing the launcher window
+        st = call(server + "/api/run")[1]
+        assert st["running"] is False and st["run"] is None  # the old run isn't passed off as this one
+    finally:
+        webui.RUN.update(proc=None, offset=0, watching=False)
+        config.use_folder(config.JOB_FOLDER_DEFAULT)

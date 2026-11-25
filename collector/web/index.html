@@ -221,11 +221,12 @@ dialog h2 { font-size: 17px; }
         <span class="field-err" id="su-titles-err" role="alert"></span></div>
       <div class="row2">
         <div class="field"><label for="su-where">Near</label>
-          <input type="text" id="su-where" aria-describedby="su-where-hint" autocomplete="off">
-          <span class="hint" id="su-where-hint">City and province, e.g. Kitchener ON. Leave blank for remote jobs only.</span></div>
+          <input type="text" id="su-where" aria-describedby="su-where-hint su-where-err" autocomplete="off">
+          <span class="hint" id="su-where-hint">City and province, e.g. Kitchener ON. Leave blank and choose Remote only for remote jobs anywhere in Canada.</span>
+          <span class="field-err" id="su-where-err" role="alert"></span></div>
         <div class="field"><label for="su-radius">Within (miles)</label>
-          <input type="number" id="su-radius" min="1" max="100" step="1" aria-describedby="su-radius-hint">
-          <span class="hint" id="su-radius-hint"></span></div>
+          <input type="number" id="su-radius" min="1" max="100" step="1" aria-describedby="su-radius-hint su-radius-err">
+          <span class="hint" id="su-radius-hint"></span><span class="field-err" id="su-radius-err" role="alert"></span></div>
       </div>
       <fieldset class="field"><legend>Work model</legend>
         <div class="toggles" id="su-models">
@@ -274,6 +275,7 @@ dialog h2 { font-size: 17px; }
       <div id="su-done" hidden><a class="btn primary" href="#audit">See jobs</a></div>
     </section>
 
+    <p class="field-err" id="su-error" role="alert"></p>
     <div class="setup-nav">
       <a class="later" href="#settings" id="su-later">Set up later</a>
       <button type="button" class="btn" id="su-back">Back</button>
@@ -759,6 +761,7 @@ $("folder-actions").addEventListener("click", async e => {
     const r = await api("/api/folder", {path: PICKED, mode: b.dataset.mode});
     $("folder-pick").hidden = true; $("folder-manual").hidden = true;
     await loadSettings(); loadJobs(); loadRuns();
+    if (VIEW === "setup") fillSetup();
     folderStatus(r.message, true);
   } catch (err) {
     folderStatus(err.message, false);
@@ -772,12 +775,15 @@ const emailReady = () => !!(CFG && CFG.has_password && CFG.EMAIL_TO && CFG.EMAIL
 async function enterSetup() {
   $("su-folder-slot").append($("folder-box"));
   await loadSettings();
+  fillSetup();
+}
+function fillSetup() {  // also after a folder switch: the new folder may hold a profile already
   if (!CFG || !CFG.profile) return;
   const P = CFG.profile;
   $("su-titles").value = P.target_titles; $("su-where").value = P.search_locations || P.locations;
   $("su-radius").value = P.search_radius ?? CFG.default_radius; suRadiusHint();
-  if (P.work_model) $("su-models").querySelectorAll("button").forEach(b =>
-    b.setAttribute("aria-pressed", String(P.work_model.toLowerCase().includes(b.dataset.v.toLowerCase()))));
+  $("su-models").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed",
+    String(!P.work_model || P.work_model.toLowerCase().includes(b.dataset.v.toLowerCase()))));
   $("su-to").value = CFG.EMAIL_TO; $("su-gmail").value = CFG.SMTP_USER || CFG.EMAIL_FROM;
   $("su-pw").placeholder = CFG.has_password ? "saved (leave blank to keep it)" : "";
   $("su-hours").value = String(CFG.SCHEDULE_HOURS || 2);
@@ -802,16 +808,26 @@ async function saving(fn) {
   $("su-next").disabled = true; const label = $("su-next").textContent; $("su-next").textContent = "Saving…";
   try { return await fn(); } finally { $("su-next").disabled = false; $("su-next").textContent = label; }
 }
+let SCHED_SEEN = false;
 $("su-next").addEventListener("click", async () => {
+  $("su-error").textContent = "";
   try {
     if (STEP === 2 && !(await saveJob())) return;
     if (STEP === 3) { const ok = await saveEmail(true); if (ok === "skip") return $("su-skip-dialog").showModal(); if (!ok) return; }
-    if (STEP === 4) await saving(async () => {
-      const r = await api("/api/config", {SCHEDULE_PLATFORM: CFG.SCHEDULE_PLATFORM, SCHEDULE_HOURS: Number($("su-hours").value)});
-      $("su-sched-status").textContent = r.schedule_message || ""; CFG = r;
-    });
+    if (STEP === 4 && !SCHED_SEEN) {
+      const r = await saving(() => api("/api/config", {SCHEDULE_PLATFORM: CFG.SCHEDULE_PLATFORM, SCHEDULE_HOURS: Number($("su-hours").value)}));
+      CFG = r;
+      const msg = r.schedule_message || "";
+      if (/^(Settings saved, but|Schedule saved for)/.test(msg)) {  // not applied: say so before moving on
+        $("su-sched-status").textContent = msg + " Checks won't run by themselves until this is fixed.";
+        $("su-sched-status").className = "status bad";
+        $("su-next").textContent = "Continue without a schedule"; SCHED_SEEN = true;
+        return;
+      }
+      $("su-sched-status").textContent = msg; $("su-sched-status").className = "status ok";
+    }
     goStep(STEP + 1);
-  } catch (e) { status(e.message, false); $("su-mail-status").textContent = e.message; $("su-mail-status").className = "status bad"; }
+  } catch (e) { $("su-error").textContent = e.message; }
 });
 $("su-suggest").addEventListener("click", () => pickFolder(CFG.suggested_folder));
 $("su-models").addEventListener("click", e => {
@@ -826,13 +842,17 @@ $("su-radius").addEventListener("input", suRadiusHint);
 async function saveJob() {
   const titles = $("su-titles").value.trim();
   const models = [...$("su-models").querySelectorAll('[aria-pressed="true"]')].map(b => b.dataset.v);
+  const where = $("su-where").value.trim(), radius = Number($("su-radius").value || 25);
   const ok = fieldErr("su-titles", titles ? "" : "Add at least one job title.") &
-             fieldErr("su-models", models.length ? "" : "Pick at least one.");
-  if (!ok) { (titles ? $("su-models").querySelector("button") : $("su-titles")).focus(); return false; }
-  const where = $("su-where").value.trim();
-  // the place searched is also the place accepted; more cities can be added in Settings → Filters
-  return saving(async () => { CFG = await api("/api/config", {profile: {target_titles: titles, search_locations: where,
-    locations: where, search_radius: $("su-radius").value, work_model: models.join(", ")}}); return true; });
+             fieldErr("su-models", models.length ? "" : "Pick at least one.") &
+             fieldErr("su-where", where || models.join() === "Remote" ? "" : "Add a city, or choose Remote only.") &
+             fieldErr("su-radius", radius >= 1 && radius <= 100 && Number.isInteger(radius) ? "" : "Use a whole number from 1 to 100.");
+  if (!ok) { document.querySelector('.setup [aria-invalid="true"]')?.focus(); return false; }
+  const P = CFG.profile, prof = {target_titles: titles, search_locations: where, search_radius: radius, work_model: models.join(", ")};
+  // the place searched is also accepted, unless the accepted cities were set separately (Settings → Filters)
+  if (!P.locations || P.locations === P.search_locations) prof.locations = where;
+  if (models.includes("Remote") && !P.remote_in) prof.remote_in = "Canada";  // remote searches run per country
+  return saving(async () => { CFG = await api("/api/config", {profile: prof}); return true; });
 }
 async function saveEmail(forNext) {
   const to = $("su-to").value.trim(), gmail = $("su-gmail").value.trim(), pw = $("su-pw").value.trim();
@@ -878,7 +898,11 @@ $("su-run").addEventListener("click", async () => {
     if (st.running) { $("su-run").textContent = `Searching… ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`; return; }
     clearInterval(RUN_TIMER);
     $("su-run").textContent = "Find jobs again"; $("su-run").disabled = false;
-    const r = st.run || {};
+    const r = st.run;
+    if (!r) {
+      $("su-result").textContent = `The check stopped before finishing. Details are in logs/collector.log in ${CFG.job_folder}.`;
+      return;
+    }
     $("su-result").textContent = `Done: ${r.new_jobs ?? 0} new jobs found, ${r.passed_filters ?? 0} match your settings` +
       (r.emailed ? `, ${r.emailed} emailed to you.` : ".");
     $("su-done").hidden = false; $("su-run").classList.remove("primary");
