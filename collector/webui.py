@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import dotenv_values
 
-from . import config, db, emailer, filters, prescore, schedule, settings
+from . import config, db, emailer, filters, folder, prescore, schedule, settings
 
 log = logging.getLogger(__name__)
 ENV_PATH = config.ROOT / ".env"
@@ -78,6 +78,7 @@ def read_config() -> dict:
     out["profile"]["salary_floor"] = s.salary_floor
     out["profile"]["search_radius"] = s.search_radius
     out["default_radius"] = settings.DEFAULT_RADIUS_MILES
+    out["job_folder"] = str(config.JOB_FOLDER)
     out["profile_path"] = str(config.PROFILE_PATH)
     out["profile_exists"] = config.PROFILE_PATH.exists()
     return out
@@ -268,6 +269,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, [dict(r) for r in db.last_runs(conn, 1000)])
             if u.path == "/api/config":
                 return self._send(200, read_config())
+            if u.path == "/api/folder":
+                return self._send(200, folder.describe(q.get("path", "")))
             return self._send(404, {"error": "not found"})
         except Exception as e:
             log.exception("GET %s", self.path)
@@ -284,6 +287,11 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/config":
                 msg = save_config(body)
                 return self._send(200, {**read_config(), "schedule_message": msg})
+            if u.path == "/api/folder/choose":
+                return self._send(200, {"path": folder.choose_native()})
+            if u.path == "/api/folder":
+                msg = folder.switch(str(body.get("path") or ""), str(body.get("mode") or ""))
+                return self._send(200, {**read_config(), "message": msg})
             if u.path == "/api/preview":
                 return self._send(200, preview(db.connect(config.DB_PATH), body, q.get("from"), q.get("to")))
             if u.path == "/api/test-email":

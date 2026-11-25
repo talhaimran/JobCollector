@@ -8,11 +8,22 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-JOB_FOLDER = Path(os.getenv("JOB_FOLDER") or ROOT).expanduser()
-PROFILE_PATH = JOB_FOLDER / "candidate-profile.md"
-DATA_DIR = ROOT / "data"
-DB_PATH = DATA_DIR / "jobs.db"
-LOCK_PATH = DATA_DIR / "collector.lock"
+LEGACY_DB = ROOT / "data" / "jobs.db"  # where the database lived before it moved into JOB_FOLDER
+
+
+def use_folder(folder: Path):
+    """Point every data path at `folder`: the profile, data/ (database, lock) and logs/ all live there."""
+    global JOB_FOLDER, PROFILE_PATH, DATA_DIR, DB_PATH, LOCK_PATH, LOGS_DIR
+    JOB_FOLDER = Path(folder).expanduser()
+    PROFILE_PATH = JOB_FOLDER / "candidate-profile.md"
+    DATA_DIR = JOB_FOLDER / "data"
+    DB_PATH = DATA_DIR / "jobs.db"
+    LOCK_PATH = DATA_DIR / "collector.lock"
+    LOGS_DIR = JOB_FOLDER / "logs"
+
+
+JOB_FOLDER_DEFAULT = Path(os.getenv("JOB_FOLDER") or ROOT).expanduser()
+use_folder(JOB_FOLDER_DEFAULT)
 
 # --- Pre-score: tune in .env or with `python -m collector ui` --------------
 # .env key -> default. The settings page edits exactly these keys.
