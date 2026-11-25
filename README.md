@@ -9,6 +9,8 @@
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#scheduling-macos-or-windows)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
 
+![JobCollector filter audit page: every collected job with the first filter it failed, grouped by rejection reason](docs/audit.png)
+
 ## Table of Contents
 
 - [Why use JobCollector?](#why-use-jobcollector)
@@ -218,6 +220,8 @@ Note that Glassdoor returns no descriptions (JobSpy 1.4.1), so Glassdoor jobs sc
 `.venv/bin/python -m collector ui` serves a page on `http://127.0.0.1:8765`. It listens only on your own computer and rejects requests from other sites. Stop it with Ctrl+C.
 
 - **Audit**: every saved job, filtered by date found or date posted (Today, Since yesterday, 7 days, 30 days, All, or a custom range). Click a rejection reason to list those jobs, and click *description* to read the text the keyword and dealbreaker checks saw. *Recent runs* lists per-source counts and errors.
+![JobCollector settings page with a live preview of which jobs would be emailed](docs/settings.png)
+
 - **Settings**: the job search settings (titles, locations, work model, salary floor, keywords, excluded companies), pre-score weights, email cutoff, Gmail addresses and app password, and *Send test email*. The app password is never sent back to the page: leave the field blank to keep the saved one. The preview re-runs the filters and scores on saved jobs with your unsaved values.
 
 No profile yet? Fill in *Job search* and save: the page creates `candidate-profile.md` with just a `## Job Search Settings` section. If the profile has no such section, one is added at the end. Target companies and base resume are still edited in the file.
