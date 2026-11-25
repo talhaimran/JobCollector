@@ -6,6 +6,7 @@ import os
 import re
 import smtplib
 import subprocess
+import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -232,6 +233,41 @@ def send_test_email():
         raise ValueError("Fill in the email addresses and the app password first, then save.") from None
 
 
+# --- run now ------------------------------------------------------------------
+class Busy(Exception):
+    pass
+
+
+RUN = {"proc": None, "offset": 0}  # the check started from this page, and where its log lines begin
+_LOG_LINE = re.compile(r"^\S+ \S+ \w+ [\w.]+: ")  # "2026-11-25 10:00:01,000 INFO collector.x: "
+
+
+def _log_path():
+    return config.LOGS_DIR / "collector.log"
+
+
+def start_run():
+    if RUN["proc"] is not None and RUN["proc"].poll() is None:
+        raise Busy("A check is already running.")
+    with db.run_lock(config.LOCK_PATH) as got:  # a scheduled check may be running
+        if not got:
+            raise Busy("A check is already running.")
+    RUN["offset"] = _log_path().stat().st_size if _log_path().exists() else 0
+    RUN["proc"] = subprocess.Popen([sys.executable, "-m", "collector", "run"], cwd=config.ROOT,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def run_status(conn) -> dict:
+    running = RUN["proc"] is not None and RUN["proc"].poll() is None
+    lines = []
+    if RUN["proc"] is not None and _log_path().exists():
+        with _log_path().open("rb") as f:
+            f.seek(RUN["offset"])
+            lines = [_LOG_LINE.sub("", l) for l in f.read().decode("utf-8", "replace").splitlines() if l.strip()]
+    last = db.last_runs(conn, 1)
+    return {"running": running, "lines": lines[-8:], "run": dict(last[0]) if last and not running else None}
+
+
 # --- HTTP ---------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     server_version = "collector-ui"
@@ -280,6 +316,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, [dict(r) for r in db.last_runs(conn, 1000)])
             if u.path == "/api/config":
                 return self._send(200, read_config())
+            if u.path == "/api/run":
+                return self._send(200, run_status(conn))
             if u.path == "/api/folder":
                 return self._send(200, folder.describe(q.get("path", "")))
             return self._send(404, {"error": "not found"})
@@ -298,6 +336,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/config":
                 msg = save_config(body)
                 return self._send(200, {**read_config(), "schedule_message": msg})
+            if u.path == "/api/run":
+                start_run()
+                return self._send(200, {"started": True})
             if u.path == "/api/folder/choose":
                 return self._send(200, {"path": folder.choose_native()})
             if u.path == "/api/folder":
@@ -309,6 +350,8 @@ class Handler(BaseHTTPRequestHandler):
                 send_test_email()
                 return self._send(200, {"ok": True})
             return self._send(404, {"error": "not found"})
+        except Busy as e:
+            return self._send(409, {"error": str(e)})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
         except Exception as e:

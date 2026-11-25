@@ -217,3 +217,38 @@ def test_test_email_auth_error_is_plain(monkeypatch, tmp_path):
     monkeypatch.setattr(webui.emailer, "send", refuse)
     with pytest.raises(ValueError, match="app password"):
         webui.send_test_email()
+
+
+def test_run_now_starts_once_and_streams_new_log_lines(server, tmp_path, monkeypatch):
+    import subprocess
+    config.use_folder(tmp_path / "data folder")
+    try:
+        log = config.LOGS_DIR / "collector.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("2026-11-25 09:00:00,000 INFO collector.pipeline: an older run\n")
+
+        class Proc:
+            code = None
+            def poll(self):
+                return self.code
+        started = []
+        def popen(cmd, **kw):
+            started.append(cmd)
+            return Proc()
+        monkeypatch.setattr(subprocess, "Popen", popen)
+
+        assert call(server + "/api/run", {})[0] == 200
+        assert started and started[0][-3:] == ["-m", "collector", "run"]
+        assert call(server + "/api/run", {}) == (409, {"error": "A check is already running."})
+
+        with log.open("a") as f:
+            f.write("2026-11-25 10:00:01,000 INFO collector.sources.randstad: randstad: 4 requests, 2 new jobs\n")
+        code, st = call(server + "/api/run")
+        assert code == 200 and st["running"] is True
+        assert st["lines"] == ["randstad: 4 requests, 2 new jobs"]  # not the older run, no timestamps
+
+        webui.RUN["proc"].code = 0
+        assert call(server + "/api/run")[1]["running"] is False
+    finally:
+        webui.RUN["proc"] = None
+        config.use_folder(config.JOB_FOLDER_DEFAULT)
