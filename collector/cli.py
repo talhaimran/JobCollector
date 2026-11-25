@@ -4,7 +4,7 @@ import logging
 import statistics
 import sys
 
-from . import config, db, pipeline, settings
+from . import config, db, folder, pipeline, settings
 from .normalize import parse_dt
 
 
@@ -14,6 +14,10 @@ def cmd_settings(_):
 
 
 def cmd_run(args):
+    config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(config.LOGS_DIR / "collector.log", encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger().addHandler(fh)
     with db.run_lock(config.LOCK_PATH) as got:
         if not got:
             logging.warning("Another run is in progress (lock held); exiting")
@@ -67,4 +71,5 @@ def main(argv=None):
     u.add_argument("--no-browser", action="store_true")
     u.set_defaults(func=lambda a: __import__("collector.webui", fromlist=["serve"]).serve(a.port, not a.no_browser))
     args = p.parse_args(argv)
+    folder.migrate_legacy()
     args.func(args)
