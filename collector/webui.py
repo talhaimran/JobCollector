@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import smtplib
 import subprocess
 import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -172,11 +173,15 @@ def apply_schedule(env: dict) -> str | None:
 
 
 def save_config(body: dict) -> str | None:
-    env, cutoff = validate(body)
-    prof = validate_profile(body)
+    """Saves what the page sent on top of what's saved, so a setup step can send just its own fields.
+    The schedule is (re)applied only when the page sends SCHEDULE_HOURS."""
+    cur = read_config()
+    merged = {**cur, **body, "profile": {**cur["profile"], **(body.get("profile") or {})}}
+    env, cutoff = validate(merged)
+    prof = validate_profile(merged)
     update_env(ENV_PATH, env)
     _atomic_write(config.PROFILE_PATH, apply_profile(profile_text(), prof, cutoff))
-    return apply_schedule(env)
+    return apply_schedule(env) if "SCHEDULE_HOURS" in body else None
 
 
 # --- queries ------------------------------------------------------------------
@@ -218,7 +223,13 @@ def send_test_email():
     for k in EMAIL_KEYS + ["SMTP_APP_PASSWORD"]:
         setattr(config, k, env.get(k) or "")
     text = "This is a test from the job collector's settings page. If you can read it, email works."
-    emailer.send("[Jobs] Test email", f"<p>{text}</p>", text)
+    try:
+        emailer.send("[Jobs] Test email", f"<p>{text}</p>", text)
+    except smtplib.SMTPAuthenticationError:
+        raise ValueError("Gmail didn't accept that password. Use an app password (16 letters from Google), "
+                         "not your normal Gmail password.") from None
+    except emailer.NotConfigured:
+        raise ValueError("Fill in the email addresses and the app password first, then save.") from None
 
 
 # --- HTTP ---------------------------------------------------------------------

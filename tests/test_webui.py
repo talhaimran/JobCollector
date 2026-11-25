@@ -192,3 +192,28 @@ def test_folder_endpoints(server, tmp_path, monkeypatch):
         assert call(server + "/api/folder", {"path": "relative", "mode": "fresh"})[0] == 400
     finally:
         config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_partial_save_keeps_other_settings(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROFILE_PATH", tmp_path / "candidate-profile.md")
+    monkeypatch.setattr(webui, "ENV_PATH", tmp_path / ".env")
+    applied = []
+    monkeypatch.setattr(webui, "apply_schedule", lambda env: applied.append(env))
+    webui.save_config({**GOOD, "SCHEDULE_HOURS": 2, "profile": PROFILE_BODY})
+    assert len(applied) == 1
+    webui.save_config({"profile": {"target_titles": "Scrum Master"}})  # one wizard step
+    cfg = webui.read_config()
+    assert cfg["profile"]["target_titles"] == "Scrum Master"
+    assert cfg["profile"]["salary_floor"] == 85000 and cfg["profile"]["dealbreakers"] == "French required"
+    assert cfg["EMAIL_FROM"] == "a@b.co" and cfg["email_cutoff"] == 55 and cfg["has_password"]
+    assert len(applied) == 1  # the schedule is applied only when the page sends it
+
+
+def test_test_email_auth_error_is_plain(monkeypatch, tmp_path):
+    import smtplib
+    monkeypatch.setattr(webui, "ENV_PATH", tmp_path / ".env")
+    def refuse(*a):
+        raise smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+    monkeypatch.setattr(webui.emailer, "send", refuse)
+    with pytest.raises(ValueError, match="app password"):
+        webui.send_test_email()

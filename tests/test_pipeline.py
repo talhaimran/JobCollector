@@ -213,3 +213,11 @@ def test_old_database_gets_new_columns(tmp_path):
     old.commit(); old.close()
     cols = {r["name"] for r in db.connect(p).execute("PRAGMA table_info(jobs)")}
     assert {"score_partial", "description_tries"} <= cols
+
+
+def test_run_without_email_records_no_error(s, tmp_path, monkeypatch):
+    for k in ("EMAIL_FROM", "EMAIL_TO", "SMTP_USER", "SMTP_APP_PASSWORD"):
+        monkeypatch.setattr(config, k, "")
+    conn = db.connect(tmp_path / "jobs.db")
+    r = pipeline.run(False, s, conn, fake_jobspy, lambda c: [], send=emailer.send, fetch_linkedin=no_linkedin)
+    assert "email" not in r["errors"] and r["emailed"] == 0 and r["to_email"] > 0
