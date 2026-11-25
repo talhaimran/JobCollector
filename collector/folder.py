@@ -20,13 +20,21 @@ def _backup(a, b):
 
 def _copy_db(src, dst):
     """A consistent copy even if the source is open (sqlite's backup API, not a file copy). Written beside
-    dst and renamed into place, so another process never opens a half-copied database."""
+    dst, then published only if dst still doesn't exist: another process never opens a half-copied
+    database, and a slower copy never replaces one already in use (FileExistsError instead)."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     part = dst.with_name(f"{dst.name}.partial-{os.getpid()}")
     try:
         with closing(sqlite3.connect(src)) as a, closing(sqlite3.connect(part)) as b:
             _backup(a, b)
-        os.replace(part, dst)
+        try:
+            os.link(part, dst)  # atomic, and fails if dst exists
+        except FileExistsError:
+            raise
+        except OSError:  # shortcut: drives without hard links (FAT/exFAT) get check-then-rename, a tiny race left
+            if dst.exists():
+                raise FileExistsError(dst)
+            os.replace(part, dst)
     finally:
         part.unlink(missing_ok=True)
 
@@ -42,7 +50,10 @@ def migrate_legacy() -> str | None:
     if (config.DB_PATH.exists() or not config.LEGACY_DB.exists() or config.DB_PATH == config.LEGACY_DB
             or _moved_marker().exists()):
         return None
-    _copy_db(config.LEGACY_DB, config.DB_PATH)
+    try:
+        _copy_db(config.LEGACY_DB, config.DB_PATH)
+    except FileExistsError:
+        return None  # another process starting at the same moment migrated it first
     _moved_marker().write_text(f"Copied to {config.DB_PATH}; Job Collector no longer reads this folder's jobs.db.\n")
     msg = f"Database copied from {config.LEGACY_DB} to {config.DB_PATH} (the original was left in place)."
     log.info(msg)
