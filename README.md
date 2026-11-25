@@ -3,6 +3,7 @@
 **Get the jobs that match you emailed every 2 hours, from LinkedIn, Indeed, Glassdoor and company career pages. No login, no AI, no subscription.**
 
 [![tests](https://github.com/talhaimran/JobCollector/actions/workflows/tests.yml/badge.svg)](https://github.com/talhaimran/JobCollector/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/talhaimran/JobCollector)](https://github.com/talhaimran/JobCollector/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![SQLite](https://img.shields.io/badge/storage-SQLite-003B57.svg?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
