@@ -89,7 +89,7 @@ details.runs .tablebox { margin-top: 10px; }
 .settings { display: grid; grid-template-columns: minmax(0, 560px) minmax(0, 1fr); gap: 24px; align-items: start; }
 @media (max-width: 900px) { .settings { grid-template-columns: minmax(0, 1fr); } }
 .group { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
-.field { display: grid; gap: 4px; }
+.field { display: grid; gap: 4px; align-content: start; }  /* a taller neighbour in .row2 must not stretch the label row */
 .field label { font-weight: 500; }
 .hint { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -107,6 +107,11 @@ textarea { font: inherit; resize: vertical; }
 .status.ok { color: var(--pass); } .status.bad { color: var(--fail); }
 .preview { position: sticky; top: 72px; display: flex; flex-direction: column; gap: 10px; }
 .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; margin-bottom: -16px; }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 14px; cursor: pointer; color: var(--muted); white-space: nowrap; font-weight: 500; }
+.tabs button:hover { color: var(--fg); }
+.tabs button[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.tabs .dot { color: var(--accent); }
 .delta.up { color: var(--pass); } .delta.down { color: var(--fail); }
 </style>
 </head>
@@ -168,14 +173,25 @@ textarea { font: inherit; resize: vertical; }
   </div>
   <div class="settings">
     <form id="cfg" class="group-stack" style="display:flex;flex-direction:column;gap:16px" novalidate>
-      <section class="group">
-        <div><h2>Job search</h2><p class="hint">Hard filters and keywords. Lists are comma-separated; a blank field switches that filter off.</p></div>
+      <div class="tabs" role="tablist" aria-label="Settings sections">
+        <button type="button" role="tab" id="t-search" data-tab="search" aria-controls="tab-search" aria-selected="false" tabindex="-1">Search<span class="dot" hidden> •</span></button>
+        <button type="button" role="tab" id="t-filters" data-tab="filters" aria-controls="tab-filters" aria-selected="false" tabindex="-1">Filters<span class="dot" hidden> •</span></button>
+        <button type="button" role="tab" id="t-scoring" data-tab="scoring" aria-controls="tab-scoring" aria-selected="false" tabindex="-1">Scoring<span class="dot" hidden> •</span></button>
+        <button type="button" role="tab" id="t-email" data-tab="email" aria-controls="tab-email" aria-selected="false" tabindex="-1">Email<span class="dot" hidden> •</span></button>
+        <button type="button" role="tab" id="t-schedule" data-tab="schedule" aria-controls="tab-schedule" aria-selected="false" tabindex="-1">Schedule<span class="dot" hidden> •</span></button>
+      </div>
+      <section class="group" role="tabpanel" id="tab-search" aria-labelledby="t-search" hidden>
+        <p class="hint">What the job boards are asked for. Lists are comma-separated.</p>
         <div class="field"><label for="p-target_titles">Target titles</label><textarea id="p-target_titles" rows="2" data-profile></textarea><span class="hint">The title must contain one of these.</span></div>
         <div class="field"><label for="p-exclude_titles">Exclude titles</label><textarea id="p-exclude_titles" rows="2" data-profile></textarea><span class="hint">Rejected if the title contains any of these.</span></div>
         <div class="row2">
           <div class="field"><label for="p-search_locations">Search locations</label><input type="text" id="p-search_locations" data-profile><span class="hint">Where the job boards look, each with the radius, e.g. Kitchener ON. Blank uses the accepted cities.</span></div>
           <div class="field"><label for="p-search_radius">Search radius (miles)</label><input type="number" id="p-search_radius" min="1" max="100" step="1" data-profile><span class="hint" id="radius-hint">25 miles ≈ 40 km.</span></div>
         </div>
+      </section>
+
+      <section class="group" role="tabpanel" id="tab-filters" aria-labelledby="t-filters" hidden>
+        <p class="hint">Hard filters: a job failing any of these is rejected. A blank field switches that filter off.</p>
         <div class="field"><label for="p-locations">Accepted cities</label><input type="text" id="p-locations" data-profile><span class="hint">Hybrid and on-site jobs pass only in one of these, e.g. Kitchener ON, Waterloo ON, Cambridge ON. Saved in your profile as "Locations".</span></div>
         <div class="field"><label for="p-remote_in">Remote in</label><input type="text" id="p-remote_in" data-profile><span class="hint">Countries where remote jobs are allowed, e.g. Canada</span></div>
         <div class="row2">
@@ -183,13 +199,13 @@ textarea { font: inherit; resize: vertical; }
           <fieldset class="field"><legend>Employment type</legend><div class="actions"><label class="check"><input type="checkbox" name="employment_type" value="Full-time" data-profile> Full-time</label><label class="check"><input type="checkbox" name="employment_type" value="Contract" data-profile> Contract</label><label class="check"><input type="checkbox" name="employment_type" value="Part-time" data-profile> Part-time</label></div></fieldset>
         </div>
         <div class="field"><label for="p-salary_floor">Salary floor (CAD/year)</label><input type="number" id="p-salary_floor" min="0" step="1000" placeholder="off" data-profile><span class="hint">Only CAD salaries are checked; jobs without a salary pass.</span></div>
-        <div class="field"><label for="p-must_have">Must-have keywords</label><textarea id="p-must_have" rows="3" data-profile></textarea><span class="hint">Scored, not filtered: each one found in the description adds to the keyword score.</span></div>
         <div class="field"><label for="p-dealbreakers">Dealbreaker keywords</label><textarea id="p-dealbreakers" rows="3" data-profile></textarea><span class="hint">Rejected if the description contains any of these phrases.</span></div>
         <div class="field"><label for="p-excluded_companies">Excluded companies</label><input type="text" id="p-excluded_companies" data-profile></div>
       </section>
 
-      <section class="group">
-        <div><h2>Pre-score</h2><p class="hint">Each job that passes the filters gets a 0–100 score from two parts.</p></div>
+      <section class="group" role="tabpanel" id="tab-scoring" aria-labelledby="t-scoring" hidden>
+        <p class="hint">Each job that passes the filters gets a 0–100 score from keywords and title.</p>
+        <div class="field"><label for="p-must_have">Must-have keywords</label><textarea id="p-must_have" rows="3" data-profile></textarea><span class="hint">Scored, not filtered: each one found in the description adds to the keyword score.</span></div>
         <div class="field">
           <label for="w">Weight: keywords vs title</label>
           <div class="slider">
@@ -222,8 +238,8 @@ textarea { font: inherit; resize: vertical; }
         <div class="formula" id="formula"></div>
       </section>
 
-      <section class="group">
-        <div><h2>Email</h2><p class="hint">Gmail with an app password (Google Account → Security → 2-Step Verification → App passwords).</p></div>
+      <section class="group" role="tabpanel" id="tab-email" aria-labelledby="t-email" hidden>
+        <p class="hint">Gmail with an app password (Google Account → Security → 2-Step Verification → App passwords).</p>
         <div class="row2">
           <div class="field"><label for="from-addr">Send from</label><input type="email" id="from-addr" autocomplete="off"></div>
           <div class="field"><label for="to-addr">Send to</label><input type="email" id="to-addr" autocomplete="off"></div>
@@ -239,8 +255,8 @@ textarea { font: inherit; resize: vertical; }
         <span class="hint">Without a description the score is title-only and keywords and dealbreakers aren't checked. Glassdoor never gives descriptions; LinkedIn jobs over the request budget get theirs in a later sweep.</span>
       </section>
 
-      <section class="group">
-        <div><h2>Schedule</h2><p class="hint">How often the collector runs on this computer. LinkedIn is searched at most every 4 hours whatever this says.</p></div>
+      <section class="group" role="tabpanel" id="tab-schedule" aria-labelledby="t-schedule" hidden>
+        <p class="hint">How often the collector runs on this computer. LinkedIn is searched at most every 4 hours whatever this says.</p>
         <div class="row2">
           <div class="field"><label for="platform">Computer</label>
             <select id="platform"><option value="mac">macOS (launchd)</option><option value="windows">Windows (Task Scheduler)</option></select></div>
@@ -286,12 +302,15 @@ const localTime = iso => { if (!iso) return "–"; if (iso.length === 10) return
   const d = new Date(iso); return `${ymd(d)} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 
 /* ---------- routing ---------- */
+let VIEW = null;
 function route() {
-  const v = location.hash === "#settings" ? "settings" : "audit";
+  const [hash, tab] = location.hash.split("/"), v = hash === "#settings" ? "settings" : "audit";
   $("view-audit").hidden = v !== "audit"; $("view-settings").hidden = v !== "settings";
   $("nav-audit").setAttribute("aria-current", v === "audit" ? "page" : "false");
   $("nav-settings").setAttribute("aria-current", v === "settings" ? "page" : "false");
-  if (v === "settings") loadSettings();
+  if (v === "settings") showTab(tab);
+  if (v === "settings" && VIEW !== "settings") loadSettings();  // not on tab switches: that would drop unsaved edits
+  VIEW = v;
 }
 window.addEventListener("hashchange", route);
 
@@ -423,6 +442,26 @@ function paged(key, list, noun, redraw) {
   return list.slice((p - 1) * PER_PAGE, p * PER_PAGE);
 }
 
+/* ---------- settings tabs ---------- */
+const TABS = [...document.querySelectorAll('[role="tab"]')].map(b => b.dataset.tab);
+function showTab(tab) {
+  if (!TABS.includes(tab)) tab = TABS[0];
+  TABS.forEach(t => { const on = t === tab, b = $("t-" + t);
+    b.setAttribute("aria-selected", on); b.tabIndex = on ? 0 : -1; $("tab-" + t).hidden = !on; });
+}
+const goTab = (tab, focus) => { history.replaceState(null, "", "#settings/" + tab); showTab(tab); if (focus) $("t-" + tab).focus(); };
+document.querySelector(".tabs").addEventListener("click", e => { const b = e.target.closest("[data-tab]"); if (b) goTab(b.dataset.tab); });
+document.querySelector(".tabs").addEventListener("keydown", e => {
+  const i = TABS.indexOf(e.target.dataset.tab), n = TABS.length;
+  const j = {ArrowRight: i + 1, ArrowLeft: i - 1 + n, Home: 0, End: n - 1}[e.key];
+  if (j !== undefined) { e.preventDefault(); goTab(TABS[j % n], true); }
+});
+// unsaved-change dots: compare each panel's inputs with what was loaded
+const panelState = t => [...$("tab-" + t).querySelectorAll("input, select, textarea")].map(el => el.type === "checkbox" ? el.checked : el.value).join("\u0000");
+let SAVED = {};
+const markDirty = () => TABS.forEach(t => $("t-" + t).querySelector(".dot").hidden = !(t in SAVED) || panelState(t) === SAVED[t]);
+$("cfg").addEventListener("input", markDirty);
+
 /* ---------- settings ---------- */
 let CFG = null, pvTimer = null;
 const form = () => ({
@@ -466,6 +505,7 @@ async function loadSettings() {
   $("profile-new").hidden = CFG.profile_exists;
   $("kw-count").textContent = kwCount();
   updateFormula(); schedulePreview();
+  TABS.forEach(t => SAVED[t] = panelState(t)); markDirty();
   $("save").disabled = false;
 }
 function updateFormula() {
@@ -513,7 +553,10 @@ $("platform").addEventListener("input", schedCmd);
 document.querySelectorAll("[data-profile]").forEach(el => el.addEventListener("input", () => { $("kw-count").textContent = kwCount(); schedulePreview(); }));
 $("pv-days").addEventListener("change", runPreview);
 $("cfg").addEventListener("submit", async e => {
-  e.preventDefault(); $("save").disabled = true;
+  e.preventDefault();
+  const bad = [...$("cfg").elements].find(el => el.willValidate && !el.checkValidity());
+  if (bad) { goTab(bad.closest('[role="tabpanel"]').id.slice(4)); bad.reportValidity(); return; }
+  $("save").disabled = true;
   try { const r = await api("/api/config", form()); await loadSettings();
     status("Saved. The next run uses these settings." + (r.schedule_message ? " " + r.schedule_message : ""), !/not applied|wasn't applied/.test(r.schedule_message || "")); }
   catch (err) { status(err.message, false); $("save").disabled = false; }
