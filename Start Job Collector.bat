@@ -4,7 +4,9 @@ setlocal
 cd /d "%~dp0"
 
 rem It keeps its own copy of Python's packages in .venv here, so the folder must be writable
-(type nul > ".write-test") 2>nul && del ".write-test" || (
+rem A new, randomly named empty folder: mkdir never overwrites, rmdir only removes empty folders
+set "PROBE=.jobcollector-write-check-%RANDOM%%RANDOM%"
+mkdir "%PROBE%" 2>nul && rmdir "%PROBE%" || (
   echo Job Collector can't save files in this folder:
   echo   %CD%
   echo Move the whole Job Collector folder somewhere you own, like Documents, and double-click again.
