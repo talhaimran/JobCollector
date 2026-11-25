@@ -8,6 +8,7 @@ import smtplib
 import subprocess
 import sys
 import tempfile
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -255,9 +256,17 @@ def _lock_held() -> bool:
         return not got
 
 
+_STARTING = threading.Lock()  # the server is threaded: two clicks at once must start one check
+
+
 def start_run() -> bool:
     """Starts a check, or follows the one already running (e.g. saving the schedule just started one).
     Returns True if this started it."""
+    with _STARTING:
+        return _start_run()
+
+
+def _start_run() -> bool:
     if RUN["proc"] is not None and RUN["proc"].poll() is None:
         raise Busy("A check is already running.")
     RUN["offset"] = _log_path().stat().st_size if _log_path().exists() else 0
@@ -287,7 +296,10 @@ def run_status(conn) -> dict:
     code = RUN["proc"].poll() if RUN["proc"] is not None else None
     if code not in (None, 0, 75):  # crashed (75: lost the lock to a check starting then, which we follow)
         RUN["after_id"] = None  # so no later run is passed off as its result
-    running = (RUN["proc"] is not None and RUN["proc"].poll() is None) or (RUN["watching"] and _lock_held())
+    if RUN["proc"] is not None and code != 75:
+        running = code is None  # our own check: done when it exits, whoever takes the lock next
+    else:
+        running = RUN["watching"] and _lock_held()  # a check we joined
     lines = []
     if RUN["watching"] and _log_path().exists():
         with _log_path().open("rb") as f:
@@ -297,9 +309,11 @@ def run_status(conn) -> dict:
         # and raw data dumps like "Run 1 done: {...}"
         lines = [m for m in (_LOG_LINE.sub("", l) for l in text.splitlines() if _LOG_LINE.match(l))
                  if not m.endswith(":") and "{'" not in m]
-    last = db.last_runs(conn, 1)
-    mine = last and RUN["after_id"] is not None and last[0]["id"] > RUN["after_id"] and last[0]["finished_at"]
-    return {"running": running, "lines": lines[-8:], "run": dict(last[0]) if mine and not running else None}
+    # the first run after the click is ours (or the one we joined); a later scheduled one never is
+    row = None if RUN["after_id"] is None else conn.execute(
+        "SELECT * FROM runs WHERE id > ? ORDER BY id LIMIT 1", (RUN["after_id"],)).fetchone()
+    mine = row is not None and row["finished_at"]
+    return {"running": running, "lines": lines[-8:], "run": dict(row) if mine and not running else None}
 
 
 # --- HTTP ---------------------------------------------------------------------
