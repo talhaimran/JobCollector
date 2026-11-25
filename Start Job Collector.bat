@@ -3,6 +3,15 @@ rem Double-click to open Job Collector. The first time it installs what it needs
 setlocal
 cd /d "%~dp0"
 
+rem It keeps its own copy of Python's packages in .venv here, so the folder must be writable
+(type nul > ".write-test") 2>nul && del ".write-test" || (
+  echo Job Collector can't save files in this folder:
+  echo   %CD%
+  echo Move the whole Job Collector folder somewhere you own, like Documents, and double-click again.
+  pause
+  exit /b 1
+)
+
 rem Python 3.10 or newer: the py launcher first, then python on PATH
 set "PY="
 py -3 -c "import sys; sys.exit(sys.version_info < (3, 10))" >nul 2>&1 && set "PY=py -3"

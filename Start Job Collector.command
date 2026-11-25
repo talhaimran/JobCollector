@@ -4,6 +4,14 @@ cd "$(dirname "$0")" || exit 1
 
 pause() { read -r -p "Press Enter to close this window." _; }
 
+# It keeps its own copy of Python's packages in .venv here, so the folder must be writable
+if [ ! -w . ]; then
+  echo "Job Collector can't save files in this folder:"
+  echo "  $PWD"
+  echo "Move the whole Job Collector folder somewhere you own, like Documents, and double-click again."
+  pause; exit 1
+fi
+
 # Python 3.10 or newer
 PY=""
 for c in python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
