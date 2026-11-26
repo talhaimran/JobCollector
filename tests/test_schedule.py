@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -6,9 +7,13 @@ from collector import config, schedule, webui
 from collector.normalize import work_model_from_text
 
 
-def test_mac_plist_and_windows_command():
+@pytest.mark.skipif(os.name == "nt", reason="the plist is built from Mac paths")
+def test_mac_plist():
     plist = schedule.mac_plist(Path("/x/proj"), 3)
     assert "<string>/x/proj/.venv/bin/python</string>" in plist and "<integer>10800</integer>" in plist
+
+
+def test_windows_command():
     cmd = schedule.windows_create(Path(r"C:\proj"), 2)
     assert cmd[:4] == ["schtasks", "/Create", "/F", "/TN"] and cmd[cmd.index("/MO") + 1] == "2"
     assert cmd[-1].endswith('run-collector.cmd"')

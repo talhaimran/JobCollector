@@ -73,7 +73,7 @@ Sites not used: ZipRecruiter and hiring.cafe block scripts outright, and Google 
 
 No terminal needed.
 
-1. **Download** the ZIP: on GitHub click **Code → Download ZIP**, then unzip it somewhere you'll keep it and can save files, such as Documents. Not inside Program Files or Applications, or on a read-only drive: the launcher stores its setup inside that folder.
+1. **Download** the latest release: on GitHub open **[Releases](https://github.com/talhaimran/JobCollector/releases/latest)** and click **Source code (zip)** under Assets, then unzip it somewhere you'll keep it and can save files, such as Documents. Not inside Program Files or Applications, or on a read-only drive: the launcher stores its setup inside that folder.
 2. **Double-click the launcher** in the unzipped folder:
    - **Mac:** `Launch JobCollector Mac.command`. The first time, macOS blocks files from the internet: right-click it → **Open** → **Open**.
    - **Windows:** `Launch JobCollector Windows.bat`. If SmartScreen appears, click **More info → Run anyway**.
@@ -91,6 +91,12 @@ No terminal needed.
    Everything can be changed later under **Settings** (and **Run setup again** is there too).
 
 To open the page again later, double-click the launcher again; if the page is already open, it just opens it in your browser. Close the launcher window to stop the page.
+
+### Updating
+
+When a new release is out, a banner at the top of the page says so (the page asks GitHub at most once a day). Open **Settings → This computer** and click **Update now**, or run `.venv/bin/python -m collector update` (Windows: `.venv\Scripts\python -m collector update`; add `--check` to only see whether there's a newer version). Then close the launcher window and double-click the launcher again to finish.
+
+An update replaces Job Collector's own files with the release's. Your `.env` (Gmail details), job search settings, saved jobs and logs stay as they are, and the schedule keeps working. The replaced files are kept in `.update-backup/` until the next update. If an update is interrupted (the computer shuts down or the app is force-closed partway), open `.update-backup/<old version>/` and move everything in it back into the Job Collector folder, replacing what's there; or download the latest release by hand and copy your `.env`, `candidate-profile.md` and `data/` folder across. It won't update while a job check is running, or in a folder cloned with git (use `git pull` there). Version 0.1.0 can't update itself: download the latest release once by hand (step 1), then copy your `.env`, `candidate-profile.md` and `data/` folder from the old folder into the new one before you open it.
 
 ### For developers
 
@@ -141,6 +147,7 @@ Try it, then schedule it:
 .venv/bin/python -m collector run             # real run
 .venv/bin/python -m collector report          # last 10 runs + which source is fastest
 .venv/bin/python -m collector ui              # Jobs found + Settings page at http://127.0.0.1:8765
+.venv/bin/python -m collector update          # install the latest release (--check: only check)
 .venv/bin/pytest -q                           # tests (no network)
 ```
 
@@ -359,8 +366,9 @@ collector/
   pipeline.py      a run, end to end
   schedule.py      launchd / Task Scheduler install
   folder.py        the data folder: switching, copying, the native folder picker
+  update.py        check for and install the latest GitHub release
   webui.py, web/   Jobs found, Settings and setup page; Find jobs now
-  cli.py           run / settings / report / ui / schedule
+  cli.py           run / settings / report / ui / schedule / update
 Launch JobCollector Mac.command, Launch JobCollector Windows.bat
                    double-click launchers
 launchd/           macOS plist template

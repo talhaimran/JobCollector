@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -15,7 +17,8 @@ def test_update_env_keeps_comments_and_other_keys(tmp_path):
     p.write_text("# mail\nEMAIL_TO=old@x.com\nJOB_FOLDER=/a\n")
     webui.update_env(p, {"EMAIL_TO": "new@x.com", "KEYWORD_FULL_MARKS": 8})
     assert p.read_text() == "# mail\nEMAIL_TO=new@x.com\nJOB_FOLDER=/a\nKEYWORD_FULL_MARKS=8\n"
-    assert oct(p.stat().st_mode & 0o777) == "0o600"
+    if os.name != "nt":  # Windows has no Unix file modes
+        assert oct(p.stat().st_mode & 0o777) == "0o600"
 
 
 def test_set_value_rewrites_only_the_section():
@@ -515,3 +518,42 @@ def test_simultaneous_run_now_clicks_start_one_check(server, tmp_path, monkeypat
     finally:
         webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
         config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_update_api(server, monkeypatch):
+    from collector import update
+    st = {"current": "0.2.0", "latest": "0.3.0", "notes_url": "n", "zip_url": "z", "available": True}
+    monkeypatch.setattr(update, "status", lambda force=False: st)
+    assert call(server + "/api/update") == (200, st)
+
+    monkeypatch.setattr(update, "install", lambda *a, **k: "Updated to 0.3.0.")
+    assert call(server + "/api/update", {}) == (200, {"ok": True, "message": "Updated to 0.3.0."})
+
+    for err, code in ((update.Busy("A job check is running"), 409), (update.UpdateError("bad zip"), 400)):
+        def boom(*a, e=err, **k):
+            raise e
+        monkeypatch.setattr(update, "install", boom)
+        assert call(server + "/api/update", {}) == (code, {"error": str(err)})
+
+    monkeypatch.setattr(update, "install", lambda *a, **k: pytest.fail("cross-site POST installed"))
+    assert call(server + "/api/update", {}, {"Origin": "http://evil.example"})[0] == 403
+
+
+def test_page_is_served_as_loaded_at_startup(server, tmp_path, monkeypatch):
+    page = tmp_path / "index.html"
+    page.write_text("<p>old page</p>")
+    monkeypatch.setattr(webui, "PAGE", page)
+    monkeypatch.setattr(webui, "_page_html", None)
+    get = lambda: urllib.request.urlopen(server + "/").read()  # noqa: E731
+    assert get() == b"<p>old page</p>"
+    page.write_text("<p>new page from an update</p>")
+    assert get() == b"<p>old page</p>"
+
+
+def test_update_markup():
+    page = webui.PAGE.read_text()
+    for bit in ('id="update-box"', 'id="update-go"', 'id="update-banner"', 'id="update-msg"', '"/api/update"',
+                'href="#settings/schedule"'):
+        assert bit in page, bit
+    for el in ("update-banner", "update-msg"):
+        assert re.search(rf'id="{el}"[^>]*role="status"', page), el

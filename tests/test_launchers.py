@@ -3,10 +3,16 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 MAC, WIN = ROOT / "Launch JobCollector Mac.command", ROOT / "Launch JobCollector Windows.bat"
 
 
+unix_only = pytest.mark.skipif(os.name == "nt", reason="Unix file permissions and bash")
+
+
+@unix_only
 def test_launchers_exist_and_parse():
     assert MAC.exists() and WIN.exists()
     assert os.access(MAC, os.X_OK)  # Finder only runs .command files that are executable
@@ -17,6 +23,7 @@ def test_launchers_exist_and_parse():
     assert b"\r\n" in WIN.read_bytes()  # cmd.exe misreads LF-only batch files
 
 
+@unix_only
 def test_mac_launcher_explains_a_read_only_folder(tmp_path):
     folder = tmp_path / "locked"
     folder.mkdir()

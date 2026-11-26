@@ -136,6 +136,9 @@ textarea { font: inherit; resize: vertical; }
 .toggles button { min-height: 44px; padding: 10px 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; font: inherit; color: var(--fg); }
 .toggles button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 500; }
 .field-err { color: var(--fail); font-size: 13px; }
+.update-strip { background: var(--accent-soft); border-bottom: 1px solid var(--line); }
+.update-strip .in { padding-block: 8px; font-size: 13.5px; }
+.update-strip a { color: var(--accent); font-weight: 500; }
 .banner { background: var(--dup-soft); color: var(--dup); border-radius: 8px; padding: 10px 12px; line-height: 1.45; }
 .help { margin: 0; padding-left: 20px; line-height: 1.6; color: var(--muted); }
 .help a { color: var(--accent); }
@@ -154,6 +157,7 @@ dialog h2 { font-size: 17px; }
   <span class="brand">Job Collector</span>
   <nav><a href="#audit" id="nav-audit">Jobs found</a><a href="#settings" id="nav-settings">Settings</a></nav>
 </div></header>
+<div class="update-strip" id="update-banner" role="status" hidden><div class="in" id="update-banner-text"></div></div>
 
 <main class="wrap" id="view-audit">
   <div>
@@ -396,6 +400,13 @@ dialog h2 { font-size: 17px; }
             <div class="actions" id="folder-actions"></div>
           </div>
           <span class="status" id="folder-status" role="status" aria-live="polite"></span>
+        </fieldset>
+        <fieldset class="field" id="update-box">
+          <legend>Version</legend>
+          <div class="pathline"><span id="update-now">Version –</span><a id="update-notes" href="#" target="_blank" rel="noopener" hidden>What's new</a></div>
+          <span class="hint">Updating replaces Job Collector's own files with the latest release. Your settings, Gmail details, saved jobs and logs stay as they are.</span>
+          <div class="actions"><button type="button" class="btn" id="update-go" hidden>Update now</button>
+            <span class="status" id="update-msg" role="status" aria-live="polite"></span></div>
         </fieldset>
         <h3 class="sub-h">Schedule</h3>
         <p class="hint">How often the collector runs on this computer. LinkedIn is searched at most every 4 hours whatever this says.</p>
@@ -910,12 +921,40 @@ $("su-run").addEventListener("click", async () => {
   }, 2000);
 });
 
+/* ---------- updates ---------- */
+let UPDATED = false;
+function showUpdate(u) {
+  if (UPDATED) return;
+  $("update-now").textContent = u.available ? `Version ${u.current}. Version ${u.latest} is available.` : `Version ${u.current}`;
+  $("update-notes").hidden = !(u.available && u.notes_url);
+  if (u.notes_url) $("update-notes").href = u.notes_url;
+  $("update-go").hidden = !u.available;
+  $("update-banner").hidden = !u.available;
+  if (u.available) $("update-banner-text").innerHTML = `Version ${esc(u.latest)} of Job Collector is available. <a href="#settings/schedule">Update</a>`;
+}
+async function checkUpdate() {
+  try { showUpdate(await api("/api/update")); } catch (e) {}  // offline: just show nothing
+}
+$("update-go").addEventListener("click", async () => {
+  const b = $("update-go"), msg = $("update-msg");
+  b.disabled = true; b.textContent = "Updating…"; msg.textContent = ""; msg.className = "status";
+  try {
+    const r = await api("/api/update", {});
+    UPDATED = true; b.hidden = true;
+    msg.textContent = r.message; msg.className = "status ok";
+    $("update-banner-text").textContent = r.message; $("update-banner").hidden = false;
+  } catch (e) {
+    msg.textContent = e.message; msg.className = "status bad";
+  } finally { b.disabled = false; b.textContent = "Update now"; }
+});
+
 /* ---------- boot ---------- */
 let preset = "7";
 try { preset = localStorage.getItem("preset") ?? "7"; } catch (e) {}
 setPreset(preset);
 loadRuns();
 route();
+checkUpdate();
 api("/api/config").then(c => {  // first launch: no profile yet → guided setup
   if (!c.profile_exists && !location.hash.startsWith("#setup")) location.hash = "#setup/1";
 }).catch(() => {});

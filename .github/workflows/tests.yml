@@ -9,8 +9,14 @@ permissions:
   contents: read
 
 jobs:
-  pytest:
-    runs-on: ubuntu-latest
+  test:
+    name: pytest (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,4 +24,12 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      - run: pytest -q -rfE -o faulthandler_timeout=120
+
+  # Branch protection requires a check named "pytest"; this one passes only if every platform passed.
+  pytest:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
