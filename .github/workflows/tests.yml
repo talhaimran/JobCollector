@@ -15,6 +15,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,4 +23,4 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      - run: pytest -q -rfE -o faulthandler_timeout=120
