@@ -13,6 +13,26 @@ def cmd_settings(_):
     print(settings.describe(settings.load(config.PROFILE_PATH)))
 
 
+def cmd_update(args):
+    from . import update
+    if args.check:
+        s = update.status(force=True)
+        print(f"Installed: {s['current']}")
+        if not s["latest"]:
+            print("Latest: unknown (couldn't reach GitHub)")
+        else:
+            print(f"Latest: {s['latest']} ({'update available' if s['available'] else 'up to date'})")
+        return
+    try:
+        print(update.install())
+    except update.Busy as e:
+        print(e)
+        raise SystemExit(75)
+    except update.UpdateError as e:
+        print(e)
+        raise SystemExit(1)
+
+
 def cmd_run(args):
     config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
     fh = logging.FileHandler(config.LOGS_DIR / "collector.log", encoding="utf-8")
@@ -74,6 +94,9 @@ def main(argv=None):
     u.add_argument("--port", type=int, default=8765)
     u.add_argument("--no-browser", action="store_true")
     u.set_defaults(func=lambda a: __import__("collector.webui", fromlist=["serve"]).serve(a.port, not a.no_browser))
+    up = sub.add_parser("update", help="install the latest release from GitHub (keeps your settings and data)")
+    up.add_argument("--check", action="store_true", help="only say whether a newer release exists")
+    up.set_defaults(func=cmd_update)
     args = p.parse_args(argv)
     folder.migrate_legacy()
     args.func(args)

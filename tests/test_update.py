@@ -309,3 +309,37 @@ def test_keeps_only_the_latest_backup(app, tmp_path):
     make_release(tmp_path, "0.3.0")
     update.install(app, rel())
     assert [p.name for p in (app / ".update-backup").iterdir()] == ["0.2.0"]
+
+
+# --- command line ------------------------------------------------------------------------------------------------
+
+from collector import cli  # noqa: E402
+
+
+@pytest.mark.parametrize("latest,line", [("0.3.0", "Latest: 0.3.0 (update available)"),
+                                         (__version__, f"Latest: {__version__} (up to date)"),
+                                         (None, "Latest: unknown (couldn't reach GitHub)")])
+def test_cli_check(monkeypatch, capsys, latest, line):
+    seen = []
+    monkeypatch.setattr(update, "status", lambda force=False: seen.append(force) or {
+        "current": __version__, "latest": latest, "notes_url": None, "zip_url": None, "available": latest == "0.3.0"})
+    monkeypatch.setattr(update, "install", lambda *a, **k: pytest.fail("installed"))
+    cli.main(["update", "--check"])
+    out = capsys.readouterr().out
+    assert f"Installed: {__version__}" in out and line in out and seen == [True]
+
+
+def test_cli_update_prints_the_message(monkeypatch, capsys):
+    monkeypatch.setattr(update, "install", lambda *a, **k: "Updated to 0.3.0. Close ...")
+    cli.main(["update"])
+    assert "Updated to 0.3.0" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("err,code", [(update.Busy("A job check is running"), 75), (update.UpdateError("no zip"), 1)])
+def test_cli_update_errors(monkeypatch, capsys, err, code):
+    def boom(*a, **k):
+        raise err
+    monkeypatch.setattr(update, "install", boom)
+    with pytest.raises(SystemExit) as e:
+        cli.main(["update"])
+    assert e.value.code == code and str(err) in capsys.readouterr().out
