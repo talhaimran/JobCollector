@@ -515,3 +515,33 @@ def test_simultaneous_run_now_clicks_start_one_check(server, tmp_path, monkeypat
     finally:
         webui.RUN.update(proc=None, offset=0, watching=False, after_id=0)
         config.use_folder(config.JOB_FOLDER_DEFAULT)
+
+
+def test_update_api(server, monkeypatch):
+    from collector import update
+    st = {"current": "0.2.0", "latest": "0.3.0", "notes_url": "n", "zip_url": "z", "available": True}
+    monkeypatch.setattr(update, "status", lambda force=False: st)
+    assert call(server + "/api/update") == (200, st)
+
+    monkeypatch.setattr(update, "install", lambda *a, **k: "Updated to 0.3.0.")
+    assert call(server + "/api/update", {}) == (200, {"ok": True, "message": "Updated to 0.3.0."})
+
+    for err, code in ((update.Busy("A job check is running"), 409), (update.UpdateError("bad zip"), 400)):
+        def boom(*a, e=err, **k):
+            raise e
+        monkeypatch.setattr(update, "install", boom)
+        assert call(server + "/api/update", {}) == (code, {"error": str(err)})
+
+    monkeypatch.setattr(update, "install", lambda *a, **k: pytest.fail("cross-site POST installed"))
+    assert call(server + "/api/update", {}, {"Origin": "http://evil.example"})[0] == 403
+
+
+def test_page_is_served_as_loaded_at_startup(server, tmp_path, monkeypatch):
+    page = tmp_path / "index.html"
+    page.write_text("<p>old page</p>")
+    monkeypatch.setattr(webui, "PAGE", page)
+    monkeypatch.setattr(webui, "_page_html", None)
+    get = lambda: urllib.request.urlopen(server + "/").read()  # noqa: E731
+    assert get() == b"<p>old page</p>"
+    page.write_text("<p>new page from an update</p>")
+    assert get() == b"<p>old page</p>"

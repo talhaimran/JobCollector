@@ -15,11 +15,21 @@ from urllib.parse import parse_qs, urlparse
 
 from dotenv import dotenv_values
 
-from . import config, db, emailer, filters, folder, prescore, schedule, settings
+from . import config, db, emailer, filters, folder, prescore, schedule, settings, update
 
 log = logging.getLogger(__name__)
 ENV_PATH = config.ROOT / ".env"
 PAGE = Path(__file__).parent / "web" / "index.html"
+_page_html = None
+
+
+def _page() -> bytes:
+    """The page as it was when the server started: after an update, the old server keeps serving the page that
+    matches its own API until it is restarted."""
+    global _page_html
+    if _page_html is None:
+        _page_html = PAGE.read_bytes()
+    return _page_html
 EMAIL_KEYS = ["EMAIL_FROM", "EMAIL_TO", "SMTP_USER"]
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 LIST_FIELDS = ["target_titles", "exclude_titles", "search_locations", "locations", "remote_in", "work_model", "employment_type",
@@ -353,7 +363,9 @@ class Handler(BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
             if u.path == "/":
-                return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+                return self._send(200, _page(), "text/html; charset=utf-8")
+            if u.path == "/api/update":
+                return self._send(200, update.status())
             conn = db.connect(config.DB_PATH)
             if u.path == "/api/jobs":
                 return self._send(200, query_jobs(conn, q.get("from"), q.get("to"), q.get("field", "found")))
@@ -393,12 +405,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {**read_config(), "message": msg})
             if u.path == "/api/preview":
                 return self._send(200, preview(db.connect(config.DB_PATH), body, q.get("from"), q.get("to")))
+            if u.path == "/api/update":
+                return self._send(200, {"ok": True, "message": update.install()})
             if u.path == "/api/test-email":
                 send_test_email()
                 return self._send(200, {"ok": True})
             return self._send(404, {"error": "not found"})
-        except Busy as e:
+        except (Busy, update.Busy) as e:
             return self._send(409, {"error": str(e)})
+        except update.UpdateError as e:
+            return self._send(400, {"error": str(e)})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
         except Exception as e:
@@ -421,6 +437,7 @@ def _is_job_collector(url: str) -> bool:
 
 def serve(port: int = 8765, open_browser: bool = True):
     url = f"http://127.0.0.1:{port}/"
+    _page()
     try:
         httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     except OSError as e:
