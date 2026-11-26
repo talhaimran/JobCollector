@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import threading
 import urllib.parse
@@ -16,7 +17,8 @@ def test_update_env_keeps_comments_and_other_keys(tmp_path):
     p.write_text("# mail\nEMAIL_TO=old@x.com\nJOB_FOLDER=/a\n")
     webui.update_env(p, {"EMAIL_TO": "new@x.com", "KEYWORD_FULL_MARKS": 8})
     assert p.read_text() == "# mail\nEMAIL_TO=new@x.com\nJOB_FOLDER=/a\nKEYWORD_FULL_MARKS=8\n"
-    assert oct(p.stat().st_mode & 0o777) == "0o600"
+    if os.name != "nt":  # Windows has no Unix file modes
+        assert oct(p.stat().st_mode & 0o777) == "0o600"
 
 
 def test_set_value_rewrites_only_the_section():
