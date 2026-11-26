@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  pytest:
+  test:
+    name: pytest (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -24,3 +25,11 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: pytest -q -rfE -o faulthandler_timeout=120
+
+  # Branch protection requires a check named "pytest"; this one passes only if every platform passed.
+  pytest:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success
