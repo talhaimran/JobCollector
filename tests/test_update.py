@@ -88,3 +88,62 @@ def test_status_not_available(tmp_path, monkeypatch, answer):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(update, "latest", lambda: answer)
     assert update.status(force=True)["available"] is False
+
+
+# --- the release ZIP ---------------------------------------------------------------------------------------------
+
+TOP = "talhaimran-JobCollector-abc123/"
+LAUNCHERS = ("Launch JobCollector Mac.command", "Launch JobCollector Windows.bat")
+
+
+def release_files(version, **over):
+    files = {"collector/__init__.py": f'__version__ = "{version}"\n'.encode(), "collector/update.py": b"# new\n",
+             "requirements.txt": b"requests\n", LAUNCHERS[0]: b"#!/bin/bash\n", LAUNCHERS[1]: b"@echo off\r\n",
+             "README.md": b"new readme\n"}
+    files.update(over)
+    return {k: v for k, v in files.items() if v is not None}
+
+
+def make_release(tmp_path, version, extra=None, name="release.zip", **over):
+    """A ZIP shaped like GitHub's zipball. extra keys starting with / .. or second-top/ go in raw, not under the top folder."""
+    import zipfile
+    z = tmp_path / name
+    with zipfile.ZipFile(z, "w") as zf:
+        for k, v in release_files(version, **over).items():
+            zf.writestr(TOP + k, v)
+        for k, v in (extra or {}).items():
+            raw = k.startswith(("/", "..", "second-top/"))
+            zf.writestr(k if raw else TOP + k, v)
+    return z
+
+
+def test_unpack_good_release(tmp_path):
+    top = update.unpack(make_release(tmp_path, "0.3.0"), tmp_path / "new", "0.3.0")
+    assert (top / "collector" / "__init__.py").exists() and (top / LAUNCHERS[1]).exists()
+
+
+@pytest.mark.parametrize("bad", ["../evil.txt", "/abs.txt", "second-top/x.txt", TOP + "a/../../evil.txt"])
+def test_unpack_refuses_unsafe_layout(tmp_path, bad):
+    z = make_release(tmp_path, "0.3.0", {bad: b"x"})
+    with pytest.raises(update.UpdateError):
+        update.unpack(z, tmp_path / "new", "0.3.0")
+    assert not (tmp_path / "evil.txt").exists() and not (tmp_path / "new").exists()
+
+
+@pytest.mark.parametrize("over", [{LAUNCHERS[1]: None}, {"requirements.txt": None}, {"collector/__init__.py": None}])
+def test_unpack_refuses_a_release_missing_a_file(tmp_path, over):
+    with pytest.raises(update.UpdateError):
+        update.unpack(make_release(tmp_path, "0.3.0", **over), tmp_path / "new", "0.3.0")
+    assert not (tmp_path / "new").exists()
+
+
+def test_unpack_refuses_wrong_version(tmp_path):
+    with pytest.raises(update.UpdateError, match="0.4.0"):
+        update.unpack(make_release(tmp_path, "0.3.0"), tmp_path / "new", "0.4.0")
+
+
+def test_unpack_refuses_a_file_that_is_not_a_zip(tmp_path):
+    z = tmp_path / "x.zip"
+    z.write_text("<html>rate limited</html>")
+    with pytest.raises(update.UpdateError):
+        update.unpack(z, tmp_path / "new", "0.3.0")
