@@ -7,7 +7,7 @@ import requests
 
 from collector import __version__, config, update
 
-NOTES, ZIP = "https://github.com/x/releases/v0.3.0", "https://api.github.com/x/zipball/v0.3.0"
+NOTES, ZIP = "https://github.com/x/releases/v0.3.0", "https://api.github.com/repos/talhaimran/JobCollector/zipball/v0.3.0"
 
 
 class Resp:
@@ -443,3 +443,89 @@ def test_hash_written_only_for_the_apps_own_python(app, tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "prefix", str(tmp_path / "system-python"))
     update.install(app, rel())
     assert (app / ".venv/requirements.sha").read_bytes() == b"oldhash\n"  # launcher will still install into .venv
+
+
+# --- PR #19 security review fixes ---------------------------------------------------------------------------------
+
+class StreamResp:
+    def __init__(self, chunks, url=ZIP):
+        self.chunks, self.url = chunks, url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, size):
+        yield from self.chunks
+
+
+def test_download_stops_past_the_size_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(update, "MAX_DOWNLOAD", 10)
+    monkeypatch.setattr(update.requests, "get", lambda url, **kw: StreamResp([b"x" * 6, b"x" * 6]))
+    with pytest.raises(update.UpdateError, match="bigger"):
+        update._download(ZIP, tmp_path / "d.zip")
+
+
+def test_download_refuses_a_redirect_off_https(tmp_path, monkeypatch):
+    monkeypatch.setattr(update.requests, "get", lambda url, **kw: StreamResp([b"x"], url="http://codeload.github.com/z"))
+    with pytest.raises(update.UpdateError, match="HTTPS"):
+        update._download(ZIP, tmp_path / "d.zip")
+
+
+@pytest.mark.parametrize("url", ["https://evil.example/talhaimran/JobCollector/zipball/v0.3.0",
+                                 "http://api.github.com/repos/talhaimran/JobCollector/zipball/v0.3.0",
+                                 "https://api.github.com/repos/someone-else/JobCollector/zipball/v0.3.0"])
+def test_install_only_downloads_from_this_repo(app, monkeypatch, url):
+    monkeypatch.setattr(update, "_download", lambda *a: pytest.fail("downloaded"))
+    with pytest.raises(update.UpdateError, match="unexpected place"):
+        update.install(app, {**rel(), "zip_url": url})
+    _assert_still_old(app)
+
+
+def test_real_zipball_url_is_allowed():
+    assert update._trusted_zip("https://api.github.com/repos/talhaimran/JobCollector/zipball/v0.2.0")
+
+
+def test_unpack_refuses_too_much_unpacked_data(tmp_path, monkeypatch):
+    monkeypatch.setattr(update, "MAX_UNPACKED", 50)
+    with pytest.raises(update.UpdateError, match="too big"):
+        update.unpack(make_release(tmp_path, "0.3.0", {"big.bin": b"0" * 100}), tmp_path / "new", "0.3.0")
+    assert not (tmp_path / "new").exists()
+
+
+def test_unpack_refuses_too_many_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(update, "MAX_FILES", 3)
+    with pytest.raises(update.UpdateError, match="too many"):
+        update.unpack(make_release(tmp_path, "0.3.0"), tmp_path / "new", "0.3.0")
+
+
+def test_unpack_refuses_duplicate_entries(tmp_path):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # zipfile warns on a duplicate name, which is what we're building
+        z = make_release(tmp_path, "0.3.0", {"README.md": b"second copy\n"})
+    with pytest.raises(update.UpdateError, match="twice"):
+        update.unpack(z, tmp_path / "new", "0.3.0")
+
+
+def test_pip_failure_says_packages_may_have_changed(app, tmp_path, monkeypatch):
+    make_release(tmp_path, "0.3.0", **{"requirements.txt": b"requests\nnewpkg\n"})
+
+    def boom(root):
+        raise update.UpdateError("pip failed")
+    monkeypatch.setattr(update, "_pip", boom)
+    with pytest.raises(update.UpdateError) as e:
+        update.install(app, rel())
+    assert "nothing changed" not in str(e.value) and "packages" in str(e.value)
+    _assert_still_old(app)
+
+
+def test_readme_explains_recovering_from_the_backup():
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert "If an update is interrupted" in readme

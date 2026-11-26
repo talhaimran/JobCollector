@@ -21,6 +21,11 @@ log = logging.getLogger(__name__)
 
 API_URL = "https://api.github.com/repos/talhaimran/JobCollector/releases/latest"
 CHECK_EVERY = timedelta(hours=24)
+ZIP_PREFIX = "https://api.github.com/repos/talhaimran/JobCollector/"  # where GitHub's zipball_url points
+# A release is a few hundred KB; these only stop a broken or hostile one from filling the disk.
+MAX_DOWNLOAD = 50 * 1024 * 1024
+MAX_UNPACKED = 200 * 1024 * 1024
+MAX_FILES = 2000
 
 
 def parse_version(s: str) -> tuple[int, ...] | None:
@@ -98,6 +103,13 @@ def unpack(zip_path, dest, version: str):
     try:
         with zipfile.ZipFile(zip_path) as zf:
             names = zf.namelist()
+            if len(names) > MAX_FILES:
+                raise UpdateError("The download has too many files in it, so it wasn't used.")
+            if len(set(names)) != len(names):
+                raise UpdateError("The download lists the same file twice, so it wasn't used.")
+            # file_size is what extraction stops at (zipfile reads no more than that), so this bounds the disk used
+            if sum(i.file_size for i in zf.infolist()) > MAX_UNPACKED:
+                raise UpdateError("The download is too big when unpacked, so it wasn't used.")
             tops = {n.split("/", 1)[0] for n in names}
             for n in names:
                 p = PurePosixPath(n)
@@ -145,9 +157,19 @@ def _kept(name: str) -> bool:
 def _download(url: str, to: Path):
     with requests.get(url, headers={"User-Agent": "JobCollector"}, timeout=config.HTTP_TIMEOUT, stream=True) as r:
         r.raise_for_status()
+        if not str(r.url).startswith("https://"):  # GitHub redirects to codeload.github.com; never off HTTPS
+            raise UpdateError("the download was redirected away from HTTPS")
+        size = 0
         with open(to, "wb") as f:
             for chunk in r.iter_content(64 * 1024):
+                size += len(chunk)
+                if size > MAX_DOWNLOAD:
+                    raise UpdateError("the download is much bigger than a release should be")
                 f.write(chunk)
+
+
+def _trusted_zip(url) -> bool:
+    return isinstance(url, str) and url.startswith(ZIP_PREFIX)
 
 
 def _pip(root: Path):
@@ -179,6 +201,8 @@ def install(root: Path = config.ROOT, release=_ASK) -> str:
     version, current = release["version"], installed(root)
     if (parse_version(version) or ()) <= (parse_version(current) or ()):
         return f"Already up to date ({current})."
+    if not _trusted_zip(release["zip_url"]):
+        raise UpdateError("GitHub pointed the download to an unexpected place, so nothing was downloaded.")
     with db.run_lock(config.LOCK_PATH) as got:
         if not got:
             raise Busy("A job check is running; try again when it finishes.")
@@ -212,6 +236,7 @@ def _swap(root: Path, top: Path, current: str):
         backup = backups / f"{current}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     old_req = (root / "requirements.txt").read_bytes() if (root / "requirements.txt").exists() else None
     done = []  # ("backup" | "new", name), in order, so a failure can be undone
+    pip_ran = False
     try:
         for src in sorted(top.iterdir()):
             name, cur = src.name, root / src.name
@@ -227,6 +252,7 @@ def _swap(root: Path, top: Path, current: str):
             done.append(("new", name))
         req = (root / "requirements.txt").read_bytes()
         if req != old_req:
+            pip_ran = True
             _pip(root)  # scheduled checks run the new code without the launcher, so they need the packages now
             venv = root / ".venv"
             if venv.is_dir() and Path(sys.prefix).resolve() == venv.resolve():  # else the launcher still installs
@@ -237,6 +263,9 @@ def _swap(root: Path, top: Path, current: str):
             raise UpdateError(f"The update didn't finish ({e}), and some files couldn't be put back: "
                               f"{', '.join(stuck)}. Copies of the old ones are in {backup}. Download the "
                               "latest release by hand to repair the app; your data folder is untouched.") from e
+        if pip_ran:  # pip can't be undone: it may have upgraded some packages before failing
+            raise UpdateError(f"The update didn't finish ({e}). Job Collector's files were put back, but some "
+                              "Python packages may have been upgraded; the app normally runs fine with them.") from e
         raise UpdateError(f"The update didn't finish, so nothing changed: {e}.") from e
     for old in backups.iterdir() if backups.is_dir() else ():
         if old != backup:
