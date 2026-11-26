@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -545,3 +546,12 @@ def test_page_is_served_as_loaded_at_startup(server, tmp_path, monkeypatch):
     assert get() == b"<p>old page</p>"
     page.write_text("<p>new page from an update</p>")
     assert get() == b"<p>old page</p>"
+
+
+def test_update_markup():
+    page = webui.PAGE.read_text()
+    for bit in ('id="update-box"', 'id="update-go"', 'id="update-banner"', 'id="update-msg"', '"/api/update"',
+                'href="#settings/schedule"'):
+        assert bit in page, bit
+    for el in ("update-banner", "update-msg"):
+        assert re.search(rf'id="{el}"[^>]*role="status"', page), el
