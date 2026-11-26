@@ -1,16 +1,20 @@
 """Update to the latest GitHub release: check for one, and install it in place.
 Design: docs/superpowers/specs/2026-11-25-self-update-design.md"""
+import hashlib
 import json
 import logging
 import re
+from fnmatch import fnmatch
 import shutil
+import subprocess
+import sys
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 import requests
 
-from . import __version__, config
+from . import __version__, config, db
 
 log = logging.getLogger(__name__)
 
@@ -106,3 +110,113 @@ def unpack(zip_path, dest, version: str):
         shutil.rmtree(dest, ignore_errors=True)
         raise
     return dest / top
+
+
+class Busy(Exception):
+    """A job check holds the run lock."""
+
+
+# Never touched by an update, even if a release shipped one: the person's settings, packages, data and git checkout.
+KEEP = frozenset({".env", ".venv", "data", "logs", "candidate-profile.md", ".git", ".update-backup", ".update-new",
+                  ".update-download.zip"})
+_ASK = object()
+
+
+def _kept(name: str) -> bool:
+    return name in KEEP or fnmatch(name, "*-resume.md")
+
+
+def _download(url: str, to: Path):
+    with requests.get(url, headers={"User-Agent": "JobCollector"}, timeout=config.HTTP_TIMEOUT, stream=True) as r:
+        r.raise_for_status()
+        with open(to, "wb") as f:
+            for chunk in r.iter_content(64 * 1024):
+                f.write(chunk)
+
+
+def _pip(root: Path):
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-q",
+                        "-r", str(root / "requirements.txt")], cwd=root, capture_output=True, text=True)
+    if r.returncode:
+        last = (r.stderr.strip().splitlines() or ["unknown error"])[-1]
+        raise UpdateError(f"installing the new packages failed ({last})")
+
+
+def _remove(p: Path):
+    if p.is_dir() and not p.is_symlink():
+        shutil.rmtree(p)
+    elif p.exists() or p.is_symlink():
+        p.unlink()
+
+
+def install(root: Path = config.ROOT, release=_ASK) -> str:
+    """Install the latest release (or `release`) into the app folder `root`. Returns a message for people.
+    Raises Busy while a job check runs, UpdateError for anything else; on error the app stays as it was."""
+    root = Path(root)
+    if (root / ".git").exists():
+        raise UpdateError("This folder is a git checkout: update it with git pull instead.")
+    if release is _ASK:
+        s = status(force=True)
+        release = s["latest"] and {"version": s["latest"], "notes_url": s["notes_url"], "zip_url": s["zip_url"]}
+    if not release:
+        raise UpdateError("Couldn't reach GitHub to find the latest release. Check your internet connection and try again.")
+    version = release["version"]
+    if (parse_version(version) or ()) <= parse_version(__version__):
+        return f"Already up to date ({__version__})."
+    with db.run_lock(config.LOCK_PATH) as got:
+        if not got:
+            raise Busy("A job check is running; try again when it finishes.")
+        new, zip_path = root / ".update-new", root / ".update-download.zip"
+        _remove(new)
+        try:
+            try:
+                _download(release["zip_url"], zip_path)
+            except Exception as e:
+                raise UpdateError(f"Couldn't download version {version}: {e}") from e
+            _swap(root, unpack(zip_path, new, version))
+        finally:
+            _remove(new)
+            _remove(zip_path)
+    return f"Updated to {version}. Close the Job Collector window and double-click the launcher again to finish."
+
+
+def _swap(root: Path, top: Path):
+    backups = root / ".update-backup"
+    backup = backups / __version__
+    old_req = (root / "requirements.txt").read_bytes() if (root / "requirements.txt").exists() else None
+    _remove(backup)
+    done = []  # ("backup" | "new", name), in order, so a failure can be undone
+    try:
+        for src in sorted(top.iterdir()):
+            name, cur = src.name, root / src.name
+            if _kept(name):
+                continue
+            if src.is_file() and cur.is_file() and src.read_bytes() == cur.read_bytes():
+                continue  # unchanged: leave it, so a running launcher isn't swapped under its window
+            if cur.exists() or cur.is_symlink():
+                backup.mkdir(parents=True, exist_ok=True)
+                shutil.move(cur, backup / name)
+                done.append(("backup", name))
+            shutil.move(src, cur)
+            done.append(("new", name))
+        req = (root / "requirements.txt").read_bytes()
+        if req != old_req:
+            _pip(root)  # scheduled checks run the new code without the launcher, so they need the packages now
+            if (root / ".venv").is_dir():
+                (root / ".venv" / "requirements.sha").write_text(hashlib.sha256(req).hexdigest() + "\n")
+    except Exception as e:
+        stuck = []
+        for kind, name in reversed(done):
+            try:
+                if kind == "new":
+                    _remove(root / name)
+                else:
+                    shutil.move(backup / name, root / name)
+            except Exception:
+                log.exception("Couldn't undo the update for %s", name)
+                stuck.append(name)
+        note = f" Some files couldn't be put back ({', '.join(stuck)}); copies are in {backup}." if stuck else ""
+        raise UpdateError(f"The update didn't finish, so nothing changed: {e}.{note}") from e
+    for old in backups.iterdir() if backups.is_dir() else ():
+        if old.name != __version__:
+            _remove(old)

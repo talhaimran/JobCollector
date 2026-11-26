@@ -147,3 +147,165 @@ def test_unpack_refuses_a_file_that_is_not_a_zip(tmp_path):
     z.write_text("<html>rate limited</html>")
     with pytest.raises(update.UpdateError):
         update.unpack(z, tmp_path / "new", "0.3.0")
+
+
+# --- installing --------------------------------------------------------------------------------------------------
+
+import hashlib  # noqa: E402
+import shutil  # noqa: E402
+
+from collector import db  # noqa: E402
+
+PERSON = {".env": b"SMTP_PASSWORD=secret\n", "data/jobs.db": b"my jobs", "candidate-profile.md": b"# me\n",
+          "me-resume.md": b"resume", "logs/collector.log": b"log", ".venv/requirements.sha": b"oldhash\n"}
+
+
+def rel(version="0.3.0"):
+    return {"version": version, "notes_url": NOTES, "zip_url": ZIP}
+
+
+@pytest.fixture
+def pips():
+    return []
+
+
+@pytest.fixture
+def app(tmp_path, monkeypatch, pips):
+    """A fake install at 0.2.0 with the person's files; downloads come from tmp_path/release.zip; pip is recorded."""
+    root = tmp_path / "app"
+    for k, v in {**release_files(__version__, **{"requirements.txt": b"requests\n", "collector/old_module.py": b"old"}),
+                 **PERSON}.items():
+        (root / k).parent.mkdir(parents=True, exist_ok=True)
+        (root / k).write_bytes(v)
+    monkeypatch.setattr(config, "LOCK_PATH", tmp_path / "lockdir" / "collector.lock")
+    monkeypatch.setattr(update, "_download", lambda url, to: shutil.copy(tmp_path / "release.zip", to))
+    monkeypatch.setattr(update, "_pip", lambda r: pips.append(r))
+    return root
+
+
+def person_files_untouched(root):
+    for k, v in PERSON.items():
+        if k != ".venv/requirements.sha":
+            assert (root / k).read_bytes() == v, k
+
+
+def test_install_replaces_app_files_and_keeps_the_persons(app, tmp_path):
+    make_release(tmp_path, "0.3.0")
+    msg = update.install(app, rel())
+    assert "Updated to 0.3.0" in msg and "launcher" in msg
+    assert '"0.3.0"' in (app / "collector/__init__.py").read_text()
+    assert (app / "collector/update.py").read_bytes() == b"# new\n"
+    assert not (app / "collector/old_module.py").exists()  # gone with the old folder
+    assert (app / ".update-backup/0.2.0/collector/old_module.py").exists()
+    assert (app / "README.md").read_bytes() == b"new readme\n"
+    person_files_untouched(app)
+    assert not (app / ".update-new").exists() and not list(app.glob("*.zip"))
+
+
+def test_release_shipping_person_files_does_not_overwrite_them(app, tmp_path):
+    make_release(tmp_path, "0.3.0", {".env": b"X", "data/jobs.db": b"X", "candidate-profile.md": b"X",
+                                     "someone-resume.md": b"X", ".venv/x": b"X", "logs/x": b"X"})
+    update.install(app, rel())
+    person_files_untouched(app)
+    assert not (app / "someone-resume.md").exists() and not (app / ".venv/x").exists()
+
+
+def test_unchanged_launcher_is_not_moved(app, tmp_path):
+    make_release(tmp_path, "0.3.0")
+    before = (app / LAUNCHERS[1]).stat().st_ino
+    update.install(app, rel())
+    assert (app / LAUNCHERS[1]).stat().st_ino == before
+    assert not (app / ".update-backup/0.2.0" / LAUNCHERS[1]).exists()
+
+
+def test_changed_requirements_runs_pip_and_writes_hash(app, tmp_path, pips):
+    make_release(tmp_path, "0.3.0", **{"requirements.txt": b"requests\nnewpkg\n"})
+    update.install(app, rel())
+    assert pips == [app]
+    want = hashlib.sha256(b"requests\nnewpkg\n").hexdigest()
+    assert (app / ".venv/requirements.sha").read_text().strip() == want
+
+
+def test_same_requirements_skips_pip(app, tmp_path, pips):
+    make_release(tmp_path, "0.3.0")
+    update.install(app, rel())
+    assert pips == [] and (app / ".venv/requirements.sha").read_bytes() == b"oldhash\n"
+
+
+def _assert_still_old(app):
+    assert f'"{__version__}"' in (app / "collector/__init__.py").read_text()
+    assert (app / "collector/old_module.py").exists()
+    assert (app / "requirements.txt").read_bytes() == b"requests\n"
+    person_files_untouched(app)
+    assert not (app / ".update-new").exists() and not list(app.glob("*.zip"))
+
+
+def test_pip_failure_rolls_everything_back(app, tmp_path, monkeypatch):
+    make_release(tmp_path, "0.3.0", **{"requirements.txt": b"requests\nnewpkg\n", "README.md": b"r3\n"})
+    (app / "README.md").write_bytes(b"r2\n")
+
+    def boom(root):
+        raise update.UpdateError("pip failed")
+    monkeypatch.setattr(update, "_pip", boom)
+    with pytest.raises(update.UpdateError, match="pip failed"):
+        update.install(app, rel())
+    _assert_still_old(app)
+    assert (app / "README.md").read_bytes() == b"r2\n"
+    assert (app / ".venv/requirements.sha").read_bytes() == b"oldhash\n"
+
+
+def test_move_failure_midway_rolls_back(app, tmp_path, monkeypatch):
+    make_release(tmp_path, "0.3.0", **{"README.md": b"r3\n"})
+    (app / "README.md").write_bytes(b"r2\n")
+    real, n = shutil.move, []
+
+    def flaky(src, dst):
+        if ".update-new" in str(src):
+            n.append(src)
+            if len(n) == 2:
+                raise PermissionError("file in use")
+        return real(src, dst)
+    monkeypatch.setattr(update.shutil, "move", flaky)
+    with pytest.raises(update.UpdateError, match="file in use"):
+        update.install(app, rel())
+    _assert_still_old(app)
+    assert (app / "README.md").read_bytes() == b"r2\n"
+
+
+def test_refuses_git_clone(app, tmp_path, monkeypatch):
+    (app / ".git").mkdir()
+    monkeypatch.setattr(update, "_download", lambda *a: pytest.fail("downloaded"))
+    with pytest.raises(update.UpdateError, match="git pull"):
+        update.install(app, rel())
+
+
+def test_refuses_while_a_check_runs(app, monkeypatch):
+    monkeypatch.setattr(update, "_download", lambda *a: pytest.fail("downloaded"))
+    with db.run_lock(config.LOCK_PATH) as got:
+        assert got
+        with pytest.raises(update.Busy):
+            update.install(app, rel())
+
+
+@pytest.mark.parametrize("release", [rel(__version__), rel("0.1.0"), None])
+def test_nothing_newer_downloads_nothing(app, monkeypatch, release):
+    monkeypatch.setattr(update, "_download", lambda *a: pytest.fail("downloaded"))
+    if release is None:
+        with pytest.raises(update.UpdateError, match="GitHub"):
+            update.install(app, release)
+    else:
+        assert "up to date" in update.install(app, release)
+
+
+def test_install_without_release_asks_github(app, tmp_path, monkeypatch):
+    make_release(tmp_path, "0.3.0")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(update, "latest", lambda: rel())
+    assert "Updated to 0.3.0" in update.install(app)
+
+
+def test_keeps_only_the_latest_backup(app, tmp_path):
+    (app / ".update-backup/0.1.0").mkdir(parents=True)
+    make_release(tmp_path, "0.3.0")
+    update.install(app, rel())
+    assert [p.name for p in (app / ".update-backup").iterdir()] == ["0.2.0"]
