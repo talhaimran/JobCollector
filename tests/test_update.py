@@ -343,3 +343,11 @@ def test_cli_update_errors(monkeypatch, capsys, err, code):
     with pytest.raises(SystemExit) as e:
         cli.main(["update"])
     assert e.value.code == code and str(err) in capsys.readouterr().out
+
+
+def test_docs_explain_releases_and_updating():
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    readme, contributing = (root / "README.md").read_text(), (root / "CONTRIBUTING.md").read_text()
+    assert "Releases" in readme and "collector update" in readme and "Code → Download ZIP" not in readme
+    assert "__version__" in contributing
