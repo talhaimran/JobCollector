@@ -2,6 +2,7 @@
 Design: docs/superpowers/specs/2026-11-25-self-update-design.md"""
 import hashlib
 import json
+import os
 import logging
 import re
 from fnmatch import fnmatch
@@ -47,6 +48,14 @@ def _cache_path():
     return config.DATA_DIR / "update-check.json"  # DATA_DIR moves with the data folder, so read it at call time
 
 
+def installed(root: Path | None = None) -> str:
+    """The version on disk. After an update the running code still says the old __version__ until restarted."""
+    try:
+        return _version_in((Path(root or config.ROOT) / "collector" / "__init__.py").read_text()) or __version__
+    except OSError:
+        return __version__
+
+
 def status(force: bool = False) -> dict:
     """Installed vs latest version. Asks GitHub at most once a day unless force."""
     rel, path = None, _cache_path()
@@ -64,8 +73,9 @@ def status(force: bool = False) -> dict:
             path.write_text(json.dumps({"checked": datetime.now(timezone.utc).isoformat(), "latest": rel}))
         except OSError as e:
             log.info("Couldn't save the update check: %s", e)
-    newer = bool(rel) and (parse_version(rel["version"]) or ()) > parse_version(__version__)
-    return {"current": __version__, "latest": rel and rel["version"], "notes_url": rel and rel["notes_url"],
+    current = installed()
+    newer = bool(rel) and (parse_version(rel["version"]) or ()) > (parse_version(current) or ())
+    return {"current": current, "latest": rel and rel["version"], "notes_url": rel and rel["notes_url"],
             "zip_url": rel and rel["zip_url"], "available": newer}
 
 
@@ -103,6 +113,12 @@ def unpack(zip_path, dest, version: str):
             if found != version:
                 raise UpdateError(f"The download says it is version {found or 'unknown'}, not {version}, so it wasn't used.")
             zf.extractall(dest)
+            for info in zf.infolist():  # extractall drops Unix permissions; the Mac launcher must stay executable
+                mode = (info.external_attr >> 16) & 0o777
+                if mode and not info.is_dir():
+                    os.chmod(dest / info.filename, mode)
+            mac = dest / top / "Launch JobCollector Mac.command"
+            os.chmod(mac, os.stat(mac).st_mode | 0o111)
     except zipfile.BadZipFile:
         shutil.rmtree(dest, ignore_errors=True)
         raise UpdateError("The download isn't a valid ZIP file, so it wasn't used. Try again later.")
@@ -160,31 +176,41 @@ def install(root: Path = config.ROOT, release=_ASK) -> str:
         release = s["latest"] and {"version": s["latest"], "notes_url": s["notes_url"], "zip_url": s["zip_url"]}
     if not release:
         raise UpdateError("Couldn't reach GitHub to find the latest release. Check your internet connection and try again.")
-    version = release["version"]
-    if (parse_version(version) or ()) <= parse_version(__version__):
-        return f"Already up to date ({__version__})."
+    version, current = release["version"], installed(root)
+    if (parse_version(version) or ()) <= (parse_version(current) or ()):
+        return f"Already up to date ({current})."
     with db.run_lock(config.LOCK_PATH) as got:
         if not got:
             raise Busy("A job check is running; try again when it finishes.")
         new, zip_path = root / ".update-new", root / ".update-download.zip"
-        _remove(new)
         try:
+            _remove(new)
             try:
                 _download(release["zip_url"], zip_path)
             except Exception as e:
                 raise UpdateError(f"Couldn't download version {version}: {e}") from e
-            _swap(root, unpack(zip_path, new, version))
+            top = unpack(zip_path, new, version)
+        except OSError as e:  # disk full, a leftover folder in use: nothing has been touched yet
+            raise UpdateError(f"Couldn't prepare the update, so nothing changed: {e}") from e
+        try:
+            _swap(root, top, current)
         finally:
-            _remove(new)
-            _remove(zip_path)
+            for p in (new, zip_path):
+                try:
+                    _remove(p)
+                except OSError:
+                    log.warning("Couldn't remove %s after the update", p)
     return f"Updated to {version}. Close the Job Collector window and double-click the launcher again to finish."
 
 
-def _swap(root: Path, top: Path):
+def _swap(root: Path, top: Path, current: str):
+    """Move the release's files into root. Plain renames only (same drive): a rename either happens or it doesn't,
+    unlike shutil.move, which falls back to copy-then-delete and can fail halfway."""
     backups = root / ".update-backup"
-    backup = backups / __version__
+    backup = backups / current
+    if backup.exists():  # an earlier attempt's backup may hold the only copy of something: never overwrite it
+        backup = backups / f"{current}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     old_req = (root / "requirements.txt").read_bytes() if (root / "requirements.txt").exists() else None
-    _remove(backup)
     done = []  # ("backup" | "new", name), in order, so a failure can be undone
     try:
         for src in sorted(top.iterdir()):
@@ -195,28 +221,43 @@ def _swap(root: Path, top: Path):
                 continue  # unchanged: leave it, so a running launcher isn't swapped under its window
             if cur.exists() or cur.is_symlink():
                 backup.mkdir(parents=True, exist_ok=True)
-                shutil.move(cur, backup / name)
+                os.rename(cur, backup / name)
                 done.append(("backup", name))
-            shutil.move(src, cur)
+            os.rename(src, cur)
             done.append(("new", name))
         req = (root / "requirements.txt").read_bytes()
         if req != old_req:
             _pip(root)  # scheduled checks run the new code without the launcher, so they need the packages now
-            if (root / ".venv").is_dir():
-                (root / ".venv" / "requirements.sha").write_text(hashlib.sha256(req).hexdigest() + "\n")
+            venv = root / ".venv"
+            if venv.is_dir() and Path(sys.prefix).resolve() == venv.resolve():  # else the launcher still installs
+                (venv / "requirements.sha").write_text(hashlib.sha256(req).hexdigest() + "\n")
     except Exception as e:
-        stuck = []
-        for kind, name in reversed(done):
-            try:
-                if kind == "new":
-                    _remove(root / name)
-                else:
-                    shutil.move(backup / name, root / name)
-            except Exception:
-                log.exception("Couldn't undo the update for %s", name)
-                stuck.append(name)
-        note = f" Some files couldn't be put back ({', '.join(stuck)}); copies are in {backup}." if stuck else ""
-        raise UpdateError(f"The update didn't finish, so nothing changed: {e}.{note}") from e
+        stuck = _undo(root, backup, done)
+        if stuck:
+            raise UpdateError(f"The update didn't finish ({e}), and some files couldn't be put back: "
+                              f"{', '.join(stuck)}. Copies of the old ones are in {backup}. Download the "
+                              "latest release by hand to repair the app; your data folder is untouched.") from e
+        raise UpdateError(f"The update didn't finish, so nothing changed: {e}.") from e
     for old in backups.iterdir() if backups.is_dir() else ():
-        if old.name != __version__:
-            _remove(old)
+        if old != backup:
+            try:
+                _remove(old)
+            except OSError:
+                log.warning("Couldn't remove the old backup %s", old)
+
+
+def _undo(root: Path, backup: Path, done: list) -> list:
+    """Reverse the recorded moves. Returns the names that couldn't be put back."""
+    stuck = []
+    for kind, name in reversed(done):
+        try:
+            if kind == "new":
+                _remove(root / name)
+            elif (root / name).exists() or (root / name).is_symlink():
+                stuck.append(name)  # moving into an existing folder would nest it inside
+            else:
+                os.rename(backup / name, root / name)
+        except Exception:
+            log.exception("Couldn't undo the update for %s", name)
+            stuck.append(name)
+    return list(dict.fromkeys(stuck))

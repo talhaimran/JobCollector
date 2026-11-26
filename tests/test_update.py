@@ -218,7 +218,8 @@ def test_unchanged_launcher_is_not_moved(app, tmp_path):
     assert not (app / ".update-backup/0.2.0" / LAUNCHERS[1]).exists()
 
 
-def test_changed_requirements_runs_pip_and_writes_hash(app, tmp_path, pips):
+def test_changed_requirements_runs_pip_and_writes_hash(app, tmp_path, pips, monkeypatch):
+    monkeypatch.setattr(sys, "prefix", str(app / ".venv"))
     make_release(tmp_path, "0.3.0", **{"requirements.txt": b"requests\nnewpkg\n"})
     update.install(app, rel())
     assert pips == [app]
@@ -252,24 +253,6 @@ def test_pip_failure_rolls_everything_back(app, tmp_path, monkeypatch):
     _assert_still_old(app)
     assert (app / "README.md").read_bytes() == b"r2\n"
     assert (app / ".venv/requirements.sha").read_bytes() == b"oldhash\n"
-
-
-def test_move_failure_midway_rolls_back(app, tmp_path, monkeypatch):
-    make_release(tmp_path, "0.3.0", **{"README.md": b"r3\n"})
-    (app / "README.md").write_bytes(b"r2\n")
-    real, n = shutil.move, []
-
-    def flaky(src, dst):
-        if ".update-new" in str(src):
-            n.append(src)
-            if len(n) == 2:
-                raise PermissionError("file in use")
-        return real(src, dst)
-    monkeypatch.setattr(update.shutil, "move", flaky)
-    with pytest.raises(update.UpdateError, match="file in use"):
-        update.install(app, rel())
-    _assert_still_old(app)
-    assert (app / "README.md").read_bytes() == b"r2\n"
 
 
 def test_refuses_git_clone(app, tmp_path, monkeypatch):
@@ -351,3 +334,112 @@ def test_docs_explain_releases_and_updating():
     readme, contributing = (root / "README.md").read_text(), (root / "CONTRIBUTING.md").read_text()
     assert "Releases" in readme and "collector update" in readme and "Code → Download ZIP" not in readme
     assert "__version__" in contributing
+
+
+# --- final review fixes ------------------------------------------------------------------------------------------
+
+import os  # noqa: E402
+import stat  # noqa: E402
+import sys  # noqa: E402
+
+
+def test_swap_never_uses_copying_moves(app, tmp_path, monkeypatch):
+    # shutil.move falls back to copy + delete, which can half-fail; every move must be a plain rename
+    make_release(tmp_path, "0.3.0", **{"README.md": b"r3\n"})
+    monkeypatch.setattr(update.shutil, "move", lambda *a: pytest.fail("shutil.move used"))
+    update.install(app, rel())
+    assert '"0.3.0"' in (app / "collector/__init__.py").read_text()
+
+
+def test_rename_failure_midway_rolls_back(app, tmp_path, monkeypatch):
+    make_release(tmp_path, "0.3.0", **{"README.md": b"r3\n"})
+    (app / "README.md").write_bytes(b"r2\n")
+    real, n = os.rename, []
+
+    def flaky(src, dst):
+        if ".update-new" in str(src):
+            n.append(src)
+            if len(n) == 2:
+                raise PermissionError("file in use")
+        return real(src, dst)
+    monkeypatch.setattr(update.os, "rename", flaky)
+    with pytest.raises(update.UpdateError, match="nothing changed"):
+        update.install(app, rel())
+    _assert_still_old(app)
+    assert (app / "README.md").read_bytes() == b"r2\n"
+
+
+def test_rollback_never_moves_into_an_existing_folder(app, tmp_path, monkeypatch):
+    make_release(tmp_path, "0.3.0")
+    real = os.rename
+
+    def leave_new_in_place(src, dst):  # the new collector/ lands, then pip fails, then removing it fails
+        return real(src, dst)
+    monkeypatch.setattr(update.os, "rename", leave_new_in_place)
+    monkeypatch.setattr(update, "_pip", lambda r: (_ for _ in ()).throw(update.UpdateError("pip failed")))
+    monkeypatch.setattr(update, "_remove", lambda p: None if p.name == "collector" else update.shutil.rmtree(p, True))
+    make_release(tmp_path, "0.3.0", **{"requirements.txt": b"changed\n"})
+    with pytest.raises(update.UpdateError, match="couldn't be put back"):
+        update.install(app, rel())
+    assert not (app / "collector/collector").exists()
+    assert (app / ".update-backup/0.2.0/collector/old_module.py").exists()
+
+
+def test_after_an_update_the_installed_version_is_read_from_disk(app, tmp_path, monkeypatch):
+    make_release(tmp_path, "0.3.0")
+    update.install(app, rel())
+    assert "up to date (0.3.0)" in update.install(app, rel())  # the running code still says 0.2.0
+    assert (app / ".update-backup/0.2.0/collector/old_module.py").exists()  # the way back survives
+    monkeypatch.setattr(config, "ROOT", app)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(update, "latest", lambda: rel())
+    s = update.status(force=True)
+    assert s["current"] == "0.3.0" and not s["available"]
+
+
+def test_mac_launcher_stays_executable(app, tmp_path):
+    make_release(tmp_path, "0.3.0", **{LAUNCHERS[0]: b"#!/bin/bash\necho new\n"})
+    update.install(app, rel())
+    assert os.stat(app / LAUNCHERS[0]).st_mode & stat.S_IXUSR
+
+
+def test_unpack_keeps_permissions_from_the_zip(tmp_path):
+    import zipfile
+    z = make_release(tmp_path, "0.3.0")
+    with zipfile.ZipFile(z, "a") as zf:
+        info = zipfile.ZipInfo(TOP + "tool.sh")
+        info.external_attr = 0o755 << 16
+        zf.writestr(info, b"#!/bin/sh\n")
+    top = update.unpack(z, tmp_path / "new", "0.3.0")
+    assert os.stat(top / "tool.sh").st_mode & 0o777 == 0o755
+
+
+def test_a_retry_keeps_earlier_rescue_copies(app, tmp_path, monkeypatch):
+    rescue = app / ".update-backup/0.2.0/collector/rescued.py"
+    rescue.parent.mkdir(parents=True)
+    rescue.write_text("only copy")
+    make_release(tmp_path, "0.3.0", **{"requirements.txt": b"changed\n"})
+    monkeypatch.setattr(update, "_pip", lambda r: (_ for _ in ()).throw(update.UpdateError("pip failed")))
+    with pytest.raises(update.UpdateError):
+        update.install(app, rel())
+    assert rescue.read_text() == "only copy"
+
+
+def test_cleanup_trouble_after_success_is_not_a_failure(app, tmp_path, monkeypatch):
+    (app / ".update-backup/0.1.0").mkdir(parents=True)
+    make_release(tmp_path, "0.3.0")
+    real = update._remove
+
+    def stubborn(p):
+        if p.name == "0.1.0":
+            raise PermissionError("in use")
+        return real(p)
+    monkeypatch.setattr(update, "_remove", stubborn)
+    assert "Updated to 0.3.0" in update.install(app, rel())
+
+
+def test_hash_written_only_for_the_apps_own_python(app, tmp_path, monkeypatch):
+    make_release(tmp_path, "0.3.0", **{"requirements.txt": b"requests\nnewpkg\n"})
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "system-python"))
+    update.install(app, rel())
+    assert (app / ".venv/requirements.sha").read_bytes() == b"oldhash\n"  # launcher will still install into .venv
