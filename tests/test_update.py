@@ -397,12 +397,14 @@ def test_after_an_update_the_installed_version_is_read_from_disk(app, tmp_path, 
     assert s["current"] == "0.3.0" and not s["available"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Unix file permissions")
 def test_mac_launcher_stays_executable(app, tmp_path):
     make_release(tmp_path, "0.3.0", **{LAUNCHERS[0]: b"#!/bin/bash\necho new\n"})
     update.install(app, rel())
     assert os.stat(app / LAUNCHERS[0]).st_mode & stat.S_IXUSR
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Unix file permissions")
 def test_unpack_keeps_permissions_from_the_zip(tmp_path):
     import zipfile
     z = make_release(tmp_path, "0.3.0")

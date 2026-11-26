@@ -435,11 +435,17 @@ def _is_job_collector(url: str) -> bool:
     return (resp.headers.get("Server") or "").startswith(Handler.server_version + " ")
 
 
+class _Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind a port that's in use, so a second launcher
+    # would start a duplicate instead of finding the open one.
+    allow_reuse_address = os.name != "nt"
+
+
 def serve(port: int = 8765, open_browser: bool = True):
     url = f"http://127.0.0.1:{port}/"
     _page()
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        httpd = _Server(("127.0.0.1", port), Handler)
     except OSError as e:
         if e.errno not in (errno.EADDRINUSE, 10048):  # 10048: Windows' "address in use"
             raise
