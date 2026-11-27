@@ -141,3 +141,19 @@ def test_block_keeps_jobs_from_finished_pages(conn, s, monkeypatch):
     assert "blocked" in out["errors"][0]
     assert len(out["jobs"]) == 10 and sum(1 for j in out["jobs"] if j.get("description")) == 9
     assert conn.execute("SELECT COUNT(*) FROM linkedin_queries").fetchone()[0] == 0  # unfinished: first next time
+
+
+def _page(text):
+    return f'<div class="show-more-less-html__markup"><p>{text}</p></div>'
+
+
+@pytest.mark.parametrize("text, model", [
+    ("Lead agile ceremonies for our payments teams.", "unknown"),  # LinkedIn's remote filter alone isn't proof
+    ("This is a fully remote role open across Canada.", "remote"),
+    ("Hybrid role: 3 days a week in our Toronto office.", "hybrid"),
+])
+def test_remote_search_label_comes_from_the_job_page_not_the_filter(text, model):
+    # LinkedIn's logged-out remote filter (f_WT=2) returns on-site jobs too, e.g. TD's Scrum Master II in Toronto
+    client = linkedin.Client(10, lambda url, params=None, **kw: Resp(_page(text), url=url), lambda _: None)
+    d = linkedin._detail(client, f"{linkedin.BASE}/jobs/view/1", "Scrum Master II", "Toronto, Ontario, Canada")
+    assert d["work_model"] == model
