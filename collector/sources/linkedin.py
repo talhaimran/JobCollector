@@ -75,6 +75,7 @@ def parse_cards(html: str, remote: bool) -> list[dict]:
         jobs.append(normalize._job(
             source="linkedin", source_job_id=f"li-{job_id}", url=f"{BASE}/jobs/view/{job_id}",
             title=title, company=company.get_text(strip=True) if company else None, location=loc,
+            # provisional until the job page arrives (see _detail): only so the job page gets fetched
             work_model=normalize.detect_work_model(title, loc, is_remote=remote),
             posted_at=when.get("datetime") if when else None))
     return jobs
@@ -157,8 +158,7 @@ def sweep(conn, s, now=None, get=None, sleep=time.sleep) -> dict:
     try:
         # 1. descriptions still missing from earlier sweeps
         for row in pending_rows(conn):
-            out["refreshed"][row["id"]] = _detail(client, row["url"], row["title"], row["location"],
-                                                  row["work_model"] == "remote")
+            out["refreshed"][row["id"]] = _detail(client, row["url"], row["title"], row["location"])
             conn.execute("UPDATE jobs SET description_tries = description_tries + 1 WHERE id = ?", (row["id"],))
         # 2. searches, least recently successful first
         last = {r["key"]: r["last_success"] for r in conn.execute("SELECT * FROM linkedin_queries")}
@@ -211,13 +211,13 @@ def _search(conn, client, s, q, seconds, out, later_searches) -> int:
         for j in fresh:
             # keep one request for page 1 of every later search; skipped jobs get theirs next sweep
             if client.left > later_searches and filters.check(j, s)[0]:
-                j.update(_detail(client, j["url"], j["title"], j["location"], j["work_model"] == "remote"))
+                j.update(_detail(client, j["url"], j["title"], j["location"]))
         if not fresh or len(cards) < PER_PAGE:
             break
     return found, True
 
 
-def _detail(client, url, title, location, remote) -> dict:
+def _detail(client, url, title, location) -> dict:
     try:
         r = client.get(url)
     except requests.RequestException as e:
@@ -228,5 +228,6 @@ def _detail(client, url, title, location, remote) -> dict:
         return {}
     d = parse_detail(r.text)
     if d.get("description"):
-        d["work_model"] = normalize.detect_work_model(title, location, d["description"], is_remote=remote)
+        # not the search's remote flag: LinkedIn's logged-out remote filter returns on-site jobs too
+        d["work_model"] = normalize.detect_work_model(title, location, d["description"])
     return {k: v for k, v in d.items() if v is not None}
